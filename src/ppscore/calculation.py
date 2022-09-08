@@ -7,6 +7,8 @@ from sklearn import preprocessing
 from sklearn.model_selection import cross_val_score, cross_val_predict
 from sklearn.metrics import mean_absolute_error, f1_score, roc_auc_score, r2_score
 
+from scipy import sparse
+
 import pandas as pd
 from pandas.api.types import (
     is_numeric_dtype,
@@ -24,13 +26,15 @@ TO_BE_CALCULATED = -1
 
 
 def _calculate_model_cv_score_(
-    df, target, feature, task, cross_validation, random_seed, sample_weight = None, **kwargs
+    df, target, feature, conditional, n_bins, average, task, cross_validation, random_seed, sample_weight = None, **kwargs
 ):
     "Calculates the mean model score based on cross-validation"
     # Sources about the used methods:
     # https://scikit-learn.org/stable/modules/tree.html
     # https://scikit-learn.org/stable/modules/cross_validation.html
     # https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.cross_val_score.html
+    if conditional in [target,feature]:
+        conditional = None
     metric = task["metric_key"]
     model = task["model"]
     # shuffle the rows - this is important for cross-validation
@@ -42,15 +46,19 @@ def _calculate_model_cv_score_(
 
     scoring_method = None
     # preprocess target
-    if task["type"] == "classification":
-        label_encoder = preprocessing.LabelEncoder()
+    label_encoder = preprocessing.LabelEncoder()
+    if task["type"] == "classification":        
         df[target] = label_encoder.fit_transform(df[target])
-        target_series = df[target]
+        target_series = df[target].values.flatten()
         scoring_method = "predict_proba"
-    else:
-        target_series = preprocessing.quantile_transform(df[[target]]).flatten()
-        scoring_method = "predict"
+    else:        
+        if len(np.unique(df[target])) > n_bins:
+            target_series = preprocessing.KBinsDiscretizer(n_bins=n_bins, encode='ordinal', strategy='quantile').fit_transform(df[[target]]).flatten()
+        else:
+            target_series = label_encoder.fit_transform(df[[target]]).flatten()
+        scoring_method = "predict_proba"
 
+    labels = np.unique(target_series)
     
     # preprocess feature
     if _dtype_represents_categories(df[feature]):
@@ -63,52 +71,95 @@ def _calculate_model_cv_score_(
         array = df[feature].values
         if not isinstance(array, np.ndarray):  # e.g Int64 IntegerArray
             array = array.to_numpy()
-        feature_input = array.reshape(-1, 1)
-        feature_input = preprocessing.quantile_transform(feature_input)
-
+        if len(np.unique(array)) > n_bins:
+            # binarize to avoid overfitting        
+            feature_input = preprocessing.KBinsDiscretizer(n_bins=n_bins, encode='ordinal', strategy='quantile').fit_transform(array.reshape(-1, 1))
+        else:
+            feature_input = array.reshape(-1, 1)
+        
+    
+    #preprocess conditional 
+    if not conditional is None:
+        if _dtype_represents_categories(df[conditional]):
+            one_hot_encoder = preprocessing.OneHotEncoder()
+            array = df[conditional].__array__()
+            feature_input_cond = one_hot_encoder.fit_transform(array.reshape(-1, 1))
+            feature_input = sparse.hstack([feature_input_cond, feature_input])
+            
+        else:
+            # reshaping needed because there is only 1 feature
+            array = df[conditional].values
+            if not isinstance(array, np.ndarray):  # e.g Int64 IntegerArray
+                array = array.to_numpy()
+            if len(np.unique(array)) > n_bins:
+                # binarize to avoid overfitting        
+                feature_input_cond = preprocessing.KBinsDiscretizer(n_bins=n_bins, encode='ordinal', strategy='quantile').fit_transform(array.reshape(-1, 1))
+            else:
+                feature_input_cond = array.reshape(-1, 1)
+            
+            
+            if sparse.issparse(feature_input):
+                feature_input = sparse.hstack([feature_input, feature_input_cond])
+            else:
+                feature_input = np.hstack([feature_input, feature_input_cond])
+        
+        
+        
 
     # Cross-validation is stratifiedKFold for classification, KFold for regression
     # CV on one core (n_job=1; default) has shown to be fastest
     sample_weight = None if sample_weight is None else df[sample_weight]
     fit_params = {"sample_weight":sample_weight} if not sample_weight is None else None
     
+
     preds = cross_val_predict(
-        model, feature_input, target_series, cv=cross_validation, n_jobs=-1,
-        fit_params=fit_params, pre_dispatch='2*n_jobs', method=scoring_method)
+            model, feature_input, target_series.flatten(), cv=cross_validation, n_jobs=-1,
+            fit_params=fit_params, pre_dispatch='2*n_jobs', method=scoring_method)
     
-    
-    if task["type"] == "classification":
-        model_score = roc_auc_score(
+    if (len(labels) <= 2) and (preds.ndim > 1):
+        if preds.shape[1] == 2:
+            preds = preds[:,1]
+        elif preds.shape[1] == 1:
+            preds = preds[:,0]
+
+    model_score = roc_auc_score(
             target_series,
             preds,
-            average="weighted",
+            average=average,
             sample_weight=sample_weight if sample_weight is None else df[sample_weight],
             max_fpr=None,
             multi_class="ovr",
             labels=None
         )
+
+    if not conditional is None:
+        cond_preds = cross_val_predict(
+                model, feature_input_cond, target_series.flatten(), cv=cross_validation, n_jobs=-1,
+                fit_params=fit_params, pre_dispatch='2*n_jobs', method=scoring_method)
+
+
+        if (len(labels) <= 2) and (cond_preds.ndim > 1):
+            if cond_preds.shape[1] == 2:
+                cond_preds = cond_preds[:,1]
+            elif cond_preds.shape[1] == 1:
+                cond_preds = cond_preds.flatten()
+        
+        cond_score = roc_auc_score(
+                target_series,
+                cond_preds,
+                average=average,
+                sample_weight=sample_weight if sample_weight is None else df[sample_weight],
+                max_fpr=None,
+                multi_class="ovr",
+                labels=None
+            )
+        
+        #subtract cond effect from joint effect
+        model_score = model_score - max(0, cond_score - 0.5)
+
+        
     
-    else:        
-        model_score = r2_score(
-            target_series,
-            preds,
-            sample_weight=sample_weight if sample_weight is None else df[sample_weight],
-            multioutput='uniform_average',
-        )
-
     return model_score
-
-
-def _normalized_mae_score(model_mae, naive_mae):
-    "Normalizes the model MAE score, given the baseline score"
-    # # Value range of MAE is [0, infinity), 0 is best
-    # 10, 5 ==> 0 because worse than naive
-    # 10, 20 ==> 0.5
-    # 5, 20 ==> 0.75 = 1 - (mae/base_mae)
-    if model_mae > naive_mae:
-        return 0
-    else:
-        return 1 - (model_mae / naive_mae)
 
 
 def _normalized_r2_score(model_r2, naive_r2):
@@ -118,14 +169,6 @@ def _normalized_r2_score(model_r2, naive_r2):
     else:
         return model_r2
 
-    
-def _mae_normalizer(df, y, model_score, **kwargs):
-    "In case of MAE, calculates the baseline score for y and derives the PPS."
-    df["naive"] = df[y].median()
-    baseline_score = mean_absolute_error(df[y].to_numpy(), df["naive"].to_numpy())  # true, pred
-
-    ppscore = _normalized_mae_score(abs(model_score), baseline_score)
-    return ppscore, baseline_score
 
 def _r2_normalizer(df, y, model_score, **kwargs):
     "In case of MAE, calculates the baseline score for y and derives the PPS."        
@@ -133,20 +176,6 @@ def _r2_normalizer(df, y, model_score, **kwargs):
     ppscore = _normalized_r2_score(model_score, baseline_score)
     return ppscore, baseline_score
 
-
-def _normalized_f1_score(model_f1, baseline_f1):
-    "Normalizes the model F1 score, given the baseline score"
-    # # F1 ranges from 0 to 1
-    # # 1 is best
-    # 0.5, 0.7 ==> 0 because model is worse than naive baseline
-    # 0.75, 0.5 ==> 0.5
-    #
-    if model_f1 < baseline_f1:
-        return 0
-    else:
-        scale_range = 1.0 - baseline_f1  # eg 0.3
-        f1_diff = model_f1 - baseline_f1  # eg 0.1
-        return f1_diff / scale_range  # 0.1/0.3 = 0.33
 
     
 def _normalized_auc_score(model_auc, baseline_auc):
@@ -161,20 +190,6 @@ def _normalized_auc_score(model_auc, baseline_auc):
         return auc_diff / scale_range  # 0.1/0.3 = 0.33
 
 
-def _f1_normalizer(df, y, model_score, random_seed):
-    "In case of F1, calculates the baseline score for y and derives the PPS."
-    label_encoder = preprocessing.LabelEncoder()
-    df["truth"] = label_encoder.fit_transform(df[y])
-    df["most_common_value"] = df["truth"].value_counts().index[0]
-    random = df["truth"].sample(frac=1, random_state=random_seed)
-
-    baseline_score = max(
-        f1_score(df["truth"], df["most_common_value"], average="weighted"),
-        f1_score(df["truth"], random, average="weighted"),
-    )
-
-    ppscore = _normalized_f1_score(model_score, baseline_score)
-    return ppscore, baseline_score
 
 
 def _auc_normalizer(df, y, model_score, **kwargs):
@@ -191,10 +206,10 @@ VALID_CALCULATIONS = {
         "model_score": TO_BE_CALCULATED,
         "baseline_score": TO_BE_CALCULATED,
         "ppscore": TO_BE_CALCULATED,
-        "metric_name": "r2",
-        "metric_key": "r2",
-        "model": tree.DecisionTreeRegressor(),
-        "score_normalizer": _r2_normalizer,
+        "metric_name": "weighted AUC",
+        "metric_key": "roc_auc",
+        "model": tree.DecisionTreeClassifier(),
+        "score_normalizer": _auc_normalizer,
     },
     "classification": {
         "type": "classification",
@@ -271,15 +286,23 @@ def _dtype_represents_categories(series) -> bool:
     )
 
 
-def _determine_case_and_prepare_df(df, x, y, sample=5_000, random_seed=123):
+def _determine_case_and_prepare_df(df, x, y, conditional = None, sample=5_000, random_seed=123):
     "Returns str with the name of the determined case based on the columns x and y"
     if x == y:
         return df, "predict_itself"
 
-    df = df[[x, y]]
+    if conditional is None:
+        df = df[[x, y]]
+    else:
+        if y == conditional:            
+            conditional = None
+            df = df[[x, y]]
+        else:
+            df = df[[x, y, conditional]]
     # IDEA: log.warning when values have been dropped
-    df = df.dropna()
-
+    # dro duplciated columns
+    df = df.loc[:,~df.columns.duplicated()].copy()
+    df = df.dropna()    
     if len(df) == 0:
         return df, "empty_dataframe_after_dropping_na"
         # IDEA: show warning
@@ -364,10 +387,10 @@ def _is_column_in_df(column, df):
 
 
 def _score(
-    df, x, y, task, sample, cross_validation, random_seed, invalid_score, catch_errors, sample_weight, **kwargs
+    df, x, y, conditional,n_bins, average, task, sample, cross_validation, random_seed, invalid_score, catch_errors, sample_weight, **kwargs
 ):
     df, case_type = _determine_case_and_prepare_df(
-        df, x, y, sample=sample, random_seed=random_seed
+        df, x, y, conditional = conditional, sample=sample, random_seed=random_seed
     )
     task = _get_task(case_type, invalid_score)
 
@@ -376,6 +399,9 @@ def _score(
             df,
             target=y,
             feature=x,
+            conditional=conditional,
+            n_bins = n_bins,
+            average = average,
             task=task,
             cross_validation=cross_validation,
             random_seed=random_seed,
@@ -394,6 +420,7 @@ def _score(
     return {
         "x": x,
         "y": y,
+        "conditional":conditional,
         "ppscore": ppscore,
         "case": case_type,
         "is_valid_score": task["is_valid_score"],
@@ -408,6 +435,9 @@ def score(
     df,
     x,
     y,
+    conditional = None,
+    n_bins = 30,
+    average = "weighted",
     sample_weight = None,
     task=NOT_SUPPORTED_ANYMORE,
     sample=5_000,
@@ -488,6 +518,9 @@ def score(
             df,
             x,
             y,
+            conditional,
+            n_bins,
+            average,
             task,
             sample,
             cross_validation,
@@ -561,7 +594,7 @@ def _format_list_of_dicts(scores, output, sorted):
     return scores
 
 
-def predictors(df, y, output="df", sorted=True, **kwargs):
+def predictors(df, y, conditional = None,n_bins = 30,average = "weighted",output="df", sorted=True, verbose = False, **kwargs):
     """
     Calculate the Predictive Power Score (PPS) of all the features in the dataframe
     against a target column
@@ -607,15 +640,15 @@ def predictors(df, y, output="df", sorted=True, **kwargs):
             f"""The 'sorted' argument should be one of [True, False] but you passed: {sorted}\nPlease adjust your input to one of the valid values"""
         )
 
-    scores = [score(df, column, y, **kwargs) for column in tqdm(df.columns) if column != y]
+    scores = [score(df, column, y, conditional, n_bins, average, **kwargs) for column in tqdm(df.columns, disable = not verbose) if column != y]
 
     return _format_list_of_dicts(scores=scores, output=output, sorted=sorted)
 
 
 
-def matrix(df, output="df", sorted=False, **kwargs):
+def matrix(df, conditional = None,n_bins = 30,average = "weighted",output="df", sorted=False, verbose = False, **kwargs):
     """
-    Calculate the Predictive Power Score (PPS) matrix for all columns in the dataframe
+    Calculate the Predictive Power Score (PPS) matrix for all columns in the dataframe.
 
     Parameters
     ----------
@@ -648,6 +681,6 @@ def matrix(df, output="df", sorted=False, **kwargs):
             f"""The 'sorted' argument should be one of [True, False] but you passed: {sorted}\nPlease adjust your input to one of the valid values"""
         )
 
-    scores = [score(df, x, y, **kwargs) for x in tqdm(df.columns) for y in df.columns]
+    scores = [score(df, x, y, conditional,n_bins,average, **kwargs) for x in tqdm(df.columns, disable = not verbose) for y in df.columns]
 
     return _format_list_of_dicts(scores=scores, output=output, sorted=sorted)
