@@ -6,6 +6,7 @@ from sklearn import tree
 from sklearn import preprocessing
 from sklearn.model_selection import cross_val_score, cross_val_predict
 from sklearn.metrics import mean_absolute_error, f1_score, roc_auc_score, r2_score
+from sklearn.base import clone
 
 from scipy import sparse
 
@@ -26,7 +27,7 @@ TO_BE_CALCULATED = -1
 
 
 def _calculate_model_cv_score_(
-    df, target, feature, conditional, n_bins, average, task, cross_validation, random_seed, sample_weight = None, **kwargs
+    df, target, feature, conditional, n_bins, average, task, model, cross_validation, random_seed, sample_weight = None, **kwargs
 ):
     "Calculates the mean model score based on cross-validation"
     # Sources about the used methods:
@@ -36,7 +37,7 @@ def _calculate_model_cv_score_(
     if conditional in [target,feature]:
         conditional = None
     metric = task["metric_key"]
-    model = task["model"]
+    #model = task["model"]
     # shuffle the rows - this is important for cross-validation
     # because the cross-validation just takes the first n lines
     # if there is a strong pattern in the rows eg 0,0,0,0,1,1,1,1
@@ -113,7 +114,7 @@ def _calculate_model_cv_score_(
     
 
     preds = cross_val_predict(
-            model, feature_input, target_series.flatten(), cv=cross_validation, n_jobs=-1,
+            clone(model), feature_input, target_series.flatten(), cv=cross_validation, n_jobs=-1,
             fit_params=fit_params, pre_dispatch='2*n_jobs', method=scoring_method)
     
     if (len(labels) <= 2) and (preds.ndim > 1):
@@ -134,7 +135,7 @@ def _calculate_model_cv_score_(
 
     if not conditional is None:
         cond_preds = cross_val_predict(
-                model, feature_input_cond, target_series.flatten(), cv=cross_validation, n_jobs=-1,
+                clone(model), feature_input_cond, target_series.flatten(), cv=cross_validation, n_jobs=-1,
                 fit_params=fit_params, pre_dispatch='2*n_jobs', method=scoring_method)
 
 
@@ -387,7 +388,7 @@ def _is_column_in_df(column, df):
 
 
 def _score(
-    df, x, y, conditional,n_bins, average, task, sample, cross_validation, random_seed, invalid_score, catch_errors, sample_weight, **kwargs
+    df, x, y, conditional,n_bins, average, task, sample, model, cross_validation, random_seed, invalid_score, catch_errors, sample_weight, **kwargs
 ):
     df, case_type = _determine_case_and_prepare_df(
         df, x, y, conditional = conditional, sample=sample, random_seed=random_seed
@@ -403,6 +404,7 @@ def _score(
             n_bins = n_bins,
             average = average,
             task=task,
+            model=model,
             cross_validation=cross_validation,
             random_seed=random_seed,
             sample_weight = sample_weight
@@ -440,6 +442,7 @@ def score(
     average = "weighted",
     sample_weight = None,
     task=NOT_SUPPORTED_ANYMORE,
+    model=tree.DecisionTreeClassifier(),
     sample=5_000,
     cross_validation=4,
     random_seed=123,
@@ -461,10 +464,20 @@ def score(
     x : str
         Name of the column x which acts as the feature
     y : str
-        Name of the column y which acts as the target
+        Name of the column y which acts as the target    
+    conditional : str or None
+        Name of the column conditional which the predictive power score will be calculated conditioned on, that is P(Y|X, Conditional)    
+    n_bins: int
+        n_bins to be passed to KBinsDiscretizer, to transform a regression problem into a classification one. Also used to binarize continuous features
+        to avoid overfitting with trees.    
+    average: str
+        `average` arg passed to sklearn roc_auc_score on multiclass case (when binarizing the regression problem, it yields a multiclas classification problem)    
+    sample_weight:
+        sample_weight column name. Passed to model.fit and roc_auc_score.    
     sample : int or `None`
         Number of rows for sampling. The sampling decreases the calculation time of the PPS.
         If `None` there will be no sampling.
+        
     cross_validation : int
         Number of iterations during cross-validation. This has the following implications:
         For example, if the number is 4, then it is possible to detect patterns when there are at least 4 times the same observation. If the limit is increased, the required minimum observations also increase. This is important, because this is the limit when sklearn will throw an error and the PPS cannot be calculated
@@ -515,18 +528,19 @@ def score(
 
     try:
         return _score(
-            df,
-            x,
-            y,
-            conditional,
-            n_bins,
-            average,
-            task,
-            sample,
-            cross_validation,
-            random_seed,
-            invalid_score,
-            catch_errors,
+            df=df,
+            x=x,
+            y=y,
+            conditional=conditional,
+            n_bins=n_bins,
+            average=average,
+            task=task,
+            sample=sample,
+            model=model,
+            cross_validation=cross_validation,
+            random_seed=random_seed,
+            invalid_score=invalid_score,
+            catch_errors=catch_errors,
             sample_weight = sample_weight,
         )
     except Exception as exception:
@@ -542,7 +556,7 @@ def score(
                 "metric": task["metric_name"],
                 "baseline_score": task["baseline_score"],
                 "model_score": task["model_score"],  # sklearn returns negative mae
-                "model": task["model"],
+                "model": model,
             }
         else:
             raise exception
@@ -594,7 +608,7 @@ def _format_list_of_dicts(scores, output, sorted):
     return scores
 
 
-def predictors(df, y, conditional = None,n_bins = 30,average = "weighted",output="df", sorted=True, verbose = False, **kwargs):
+def predictors(df, y, conditional = None,n_bins = 30, model=tree.DecisionTreeClassifier(), sample=5_000, average = "weighted",output="df", sorted=True, verbose = False, **kwargs):
     """
     Calculate the Predictive Power Score (PPS) of all the features in the dataframe
     against a target column
@@ -605,6 +619,18 @@ def predictors(df, y, conditional = None,n_bins = 30,average = "weighted",output
         The dataframe that contains the data
     y : str
         Name of the column y which acts as the target
+    conditional : str or None
+        Name of the column conditional which the predictive power score will be calculated conditioned on, that is P(Y|X, Conditional)    
+    n_bins : int
+        n_bins to be passed to KBinsDiscretizer, to transform a regression problem into a classification one. Also used to binarize continuous features
+        to avoid overfitting with trees.    
+    average : str
+        `average` arg passed to sklearn roc_auc_score on multiclass case (when binarizing the regression problem, it yields a multiclas classification problem)    
+    sample_weight:
+        sample_weight column name. Passed to model.fit and roc_auc_score.    
+    sample : int or `None`
+        Number of rows for sampling. The sampling decreases the calculation time of the PPS.
+        If `None` there will be no sampling.
     output: str - potential values: "df", "list"
         Control the type of the output. Either return a pandas.DataFrame (df) or a list with the score dicts
     sorted: bool
@@ -640,20 +666,41 @@ def predictors(df, y, conditional = None,n_bins = 30,average = "weighted",output
             f"""The 'sorted' argument should be one of [True, False] but you passed: {sorted}\nPlease adjust your input to one of the valid values"""
         )
 
-    scores = [score(df, column, y, conditional, n_bins, average, **kwargs) for column in tqdm(df.columns, disable = not verbose) if column != y]
+    scores = [score(
+        df=df,
+        column=column,
+        y=y,
+        conditional=conditional,
+        model=model,
+        n_bins=n_bins,
+        average=average,
+        sample=sample,
+        **kwargs) for column in tqdm(df.columns, disable = not verbose) if column != y]
 
     return _format_list_of_dicts(scores=scores, output=output, sorted=sorted)
 
 
 
-def matrix(df, conditional = None,n_bins = 30,average = "weighted",output="df", sorted=False, verbose = False, **kwargs):
+def matrix(df, conditional = None,n_bins = 30, model = tree.DecisionTreeClassifier(), sample=5_000, average = "weighted",output="df", sorted=False, verbose = False, **kwargs):
     """
     Calculate the Predictive Power Score (PPS) matrix for all columns in the dataframe.
 
     Parameters
     ----------
     df : pandas.DataFrame
-        The dataframe that contains the data
+        The dataframe that contains the data    
+    conditional : str or None
+        Name of the column conditional which the predictive power score will be calculated conditioned on, that is P(Y|X, Conditional)    
+    n_bins: int
+        n_bins to be passed to KBinsDiscretizer, to transform a regression problem into a classification one. Also used to binarize continuous features
+        to avoid overfitting with trees.    
+    average: str
+        `average` arg passed to sklearn roc_auc_score on multiclass case (when binarizing the regression problem, it yields a multiclas classification problem)    
+    sample_weight:
+        sample_weight column name. Passed to model.fit and roc_auc_score.    
+    sample : int or `None`
+        Number of rows for sampling. The sampling decreases the calculation time of the PPS.
+        If `None` there will be no sampling.
     output: str - potential values: "df", "list"
         Control the type of the output. Either return a pandas.DataFrame (df) or a list with the score dicts
     sorted: bool
@@ -681,6 +728,15 @@ def matrix(df, conditional = None,n_bins = 30,average = "weighted",output="df", 
             f"""The 'sorted' argument should be one of [True, False] but you passed: {sorted}\nPlease adjust your input to one of the valid values"""
         )
 
-    scores = [score(df, x, y, conditional,n_bins,average, **kwargs) for x in tqdm(df.columns, disable = not verbose) for y in df.columns]
+    scores = [score(
+        df=df,
+        x=x,
+        y=y,
+        conditional=conditional,
+        n_bins=n_bins,
+        model=model,
+        average=average,
+        sample=sample,
+        **kwargs) for x in tqdm(df.columns, disable = not verbose) for y in df.columns]
 
     return _format_list_of_dicts(scores=scores, output=output, sorted=sorted)
