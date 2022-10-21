@@ -43,7 +43,7 @@ def _calculate_model_cv_score_(
     # if there is a strong pattern in the rows eg 0,0,0,0,1,1,1,1
     # then this will lead to problems because the first cv sees mostly 0 and the later 1
     # this approach might be wrong for timeseries because it might leak information
-    df = df.sample(frac=1, random_state=random_seed, replace=False)
+    #df = df.sample(frac=1, random_state=random_seed, replace=False)
 
     scoring_method = None
     # preprocess target
@@ -296,7 +296,7 @@ def _dtype_represents_categories(series) -> bool:
     )
 
 
-def _determine_case_and_prepare_df(df, x, y, conditional = None, sample=5_000, random_seed=123):
+def _determine_case_and_prepare_df(df, x, y, conditional = None, sample=5_000, dropna = True, random_seed=123):
     "Returns str with the name of the determined case based on the columns x and y"
     if x == y:
         return df, "predict_itself"
@@ -312,7 +312,11 @@ def _determine_case_and_prepare_df(df, x, y, conditional = None, sample=5_000, r
     # IDEA: log.warning when values have been dropped
     # dro duplciated columns
     df = df.loc[:,~df.columns.duplicated()].copy()
-    df = df.dropna()    
+    if dropna:
+        df = df.dropna()    
+    else:
+        pass
+    
     if len(df) == 0:
         return df, "empty_dataframe_after_dropping_na"
         # IDEA: show warning
@@ -397,10 +401,10 @@ def _is_column_in_df(column, df):
 
 
 def _score(
-    df, x, y, conditional,n_bins_target, n_bins_independent, average, task, sample, model, cross_validation, random_seed, invalid_score, catch_errors, sample_weight, **kwargs
+    df, x, y, conditional,n_bins_target, n_bins_independent, average, task, sample, dropna, model, cross_validation, random_seed, invalid_score, catch_errors, sample_weight, **kwargs
 ):
     df, case_type = _determine_case_and_prepare_df(
-        df, x, y, conditional = conditional, sample=sample, random_seed=random_seed
+        df, x, y, conditional = conditional, sample=sample, dropna= dropna, random_seed=random_seed
     )
     task = _get_task(case_type, invalid_score)
 
@@ -455,6 +459,7 @@ def score(
     task=NOT_SUPPORTED_ANYMORE,
     model=tree.DecisionTreeClassifier(),
     sample=5_000,
+    dropna=True,
     cross_validation=4,
     random_seed=123,
     invalid_score=0,
@@ -490,7 +495,8 @@ def score(
     sample : int or `None`
         Number of rows for sampling. The sampling decreases the calculation time of the PPS.
         If `None` there will be no sampling.
-        
+    dropna: bool
+        whether to keep only rows where all features are not null        
     cross_validation : int
         Number of iterations during cross-validation. This has the following implications:
         For example, if the number is 4, then it is possible to detect patterns when there are at least 4 times the same observation. If the limit is increased, the required minimum observations also increase. This is important, because this is the limit when sklearn will throw an error and the PPS cannot be calculated
@@ -550,6 +556,7 @@ def score(
             average=average,
             task=task,
             sample=sample,
+            dropna=dropna,
             model=model,
             cross_validation=cross_validation,
             random_seed=random_seed,
@@ -622,7 +629,7 @@ def _format_list_of_dicts(scores, output, sorted):
     return scores
 
 
-def predictors(df, y, conditional = None,n_bins_target = 10,n_bins_independent=30, model=tree.DecisionTreeClassifier(), sample=5_000, average = "weighted",output="df", sorted=True, verbose = False, **kwargs):
+def predictors(df, y, conditional = None,n_bins_target = 10,n_bins_independent=30, model=tree.DecisionTreeClassifier(), sample=5_000, dropna=True, average = "weighted",output="df", sorted=True, verbose = False, **kwargs):
     """
     Calculate the Predictive Power Score (PPS) of all the features in the dataframe
     against a target column
@@ -647,6 +654,8 @@ def predictors(df, y, conditional = None,n_bins_target = 10,n_bins_independent=3
     sample : int or `None`
         Number of rows for sampling. The sampling decreases the calculation time of the PPS.
         If `None` there will be no sampling.
+    dropna: bool
+        whether to keep only rows where all features are not null        
     output: str - potential values: "df", "list"
         Control the type of the output. Either return a pandas.DataFrame (df) or a list with the score dicts
     sorted: bool
@@ -692,13 +701,14 @@ def predictors(df, y, conditional = None,n_bins_target = 10,n_bins_independent=3
         n_bins_independent=n_bins_independent,
         average=average,
         sample=sample,
+        dropna=dropna,
         **kwargs) for column in tqdm(df.columns, disable = not verbose) if column != y]
 
     return _format_list_of_dicts(scores=scores, output=output, sorted=sorted)
 
 
 
-def matrix(df, conditional = None,n_bins_target = 10, n_bins_independent=30, model = tree.DecisionTreeClassifier(), sample=5_000, average = "weighted",output="df", sorted=False, verbose = False, **kwargs):
+def matrix(df, conditional = None,n_bins_target = 10, n_bins_independent=30, model = tree.DecisionTreeClassifier(), sample=5_000, dropna=True, average = "weighted",output="df", sorted=False, verbose = False, **kwargs):
     """
     Calculate the Predictive Power Score (PPS) matrix for all columns in the dataframe.
 
@@ -720,6 +730,8 @@ def matrix(df, conditional = None,n_bins_target = 10, n_bins_independent=30, mod
     sample : int or `None`
         Number of rows for sampling. The sampling decreases the calculation time of the PPS.
         If `None` there will be no sampling.
+    dropna: bool
+        whether to keep only rows where all features are not null        
     output: str - potential values: "df", "list"
         Control the type of the output. Either return a pandas.DataFrame (df) or a list with the score dicts
     sorted: bool
@@ -757,6 +769,7 @@ def matrix(df, conditional = None,n_bins_target = 10, n_bins_independent=30, mod
         model=model,
         average=average,
         sample=sample,
+        dropna=dropna,
         **kwargs) for x in tqdm(df.columns, disable = not verbose) for y in df.columns]
 
     return _format_list_of_dicts(scores=scores, output=output, sorted=sorted)
