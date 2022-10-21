@@ -447,7 +447,7 @@ def _score(
         "metric": task["metric_name"],
         "baseline_score": baseline_score,
         "model_score": abs(model_score),  # sklearn returns negative mae
-        "model": task["model"],
+        "model": model,
     }
 
 
