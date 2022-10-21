@@ -118,9 +118,8 @@ def _calculate_model_cv_score_(
 
     # Cross-validation is stratifiedKFold for classification, KFold for regression
     # CV on one core (n_job=1; default) has shown to be fastest
-    sample_weight = None if sample_weight is None else df[sample_weight]
+    sample_weight = None if sample_weight is None else df[sample_weight].values.flatten()
     fit_params = {"sample_weight":sample_weight} if not sample_weight is None else None
-    
 
     preds = cross_val_predict(
             clone(model), feature_input, target_series.flatten(), cv=cross_validation, n_jobs=-1,
@@ -136,7 +135,7 @@ def _calculate_model_cv_score_(
             target_series,
             preds,
             average=average,
-            sample_weight=sample_weight if sample_weight is None else df[sample_weight],
+            sample_weight=sample_weight,
             max_fpr=None,
             multi_class="ovr",
             labels=None
@@ -160,7 +159,7 @@ def _calculate_model_cv_score_(
                 target_series,
                 cond_preds,
                 average=average,
-                sample_weight=sample_weight if sample_weight is None else df[sample_weight],
+                sample_weight=sample_weight,
                 max_fpr=None,
                 multi_class="ovr",
                 labels=None
@@ -304,19 +303,28 @@ def _dtype_represents_categories(series) -> bool:
     )
 
 
-def _determine_case_and_prepare_df(df, x, y, conditional = None, sample=5_000, dropna = True, random_seed=123):
+def _determine_case_and_prepare_df(df, x, y, sample_weight = None,  conditional = None, sample=5_000, dropna = True, random_seed=123):
     "Returns str with the name of the determined case based on the columns x and y"
     if x == y:
         return df, "predict_itself"
 
+    cols = [x, y]
+    
     if conditional is None:
-        df = df[[x, y]]
+        pass
     else:
         if y == conditional:            
             conditional = None
-            df = df[[x, y]]
+            pass
         else:
-            df = df[[x, y, conditional]]
+            cols = cols + [conditional]
+    
+    if sample_weight is None:
+        pass
+    else:
+        cols = cols + [sample_weight]
+    
+    df = df[cols]
     # IDEA: log.warning when values have been dropped
     # dro duplciated columns
     df = df.loc[:,~df.columns.duplicated()].copy()
@@ -416,10 +424,10 @@ def _score(
     df, x, y, conditional,n_bins_target, n_bins_independent, average, task, sample, dropna, model, cross_validation, random_seed, invalid_score, catch_errors, sample_weight, **kwargs
 ):
     df, case_type = _determine_case_and_prepare_df(
-        df, x, y, conditional = conditional, sample=sample, dropna= dropna, random_seed=random_seed
+        df, x, y, sample_weight = sample_weight, conditional = conditional, sample=sample, dropna= dropna, random_seed=random_seed
     )
     task = _get_task(case_type, invalid_score)
-
+    
     if case_type in ["classification", "regression"]:
         model_score, baseline_score = _calculate_model_cv_score_(
             df,
@@ -466,11 +474,11 @@ def score(
     df,
     x,
     y,
+    sample_weight = None,
     conditional = None,
     n_bins_target = 10,
     n_bins_independent = 30,
-    average = "weighted",
-    sample_weight = None,
+    average = "weighted",    
     task=NOT_SUPPORTED_ANYMORE,
     model=tree.DecisionTreeClassifier(),
     sample=5_000,
@@ -479,6 +487,7 @@ def score(
     random_seed=123,
     invalid_score=0,
     catch_errors=True,
+    **kwargs,
 ):
     """
     Calculate the Predictive Power Score (PPS) for "x predicts y"
@@ -649,7 +658,22 @@ def _format_list_of_dicts(scores, output, sorted):
     return scores
 
 
-def predictors(df, y, conditional = None,n_bins_target = 10,n_bins_independent=30, model=tree.DecisionTreeClassifier(), sample=5_000, dropna=True, average = "weighted",output="df", sorted=True, verbose = False, **kwargs):
+def predictors(df,
+               y,
+               sample_weight = None,
+               conditional = None,
+               n_bins_target = 10,
+               n_bins_independent = 30,
+               average = "weighted",                   
+               model=tree.DecisionTreeClassifier(),
+               sample=5_000,
+               dropna=True,
+               cross_validation=4,
+               random_seed=123,
+               invalid_score=0,
+               catch_errors=True,
+               verbose = False,
+               **kwargs):
     """
     Calculate the Predictive Power Score (PPS) of all the features in the dataframe
     against a target column
@@ -667,7 +691,7 @@ def predictors(df, y, conditional = None,n_bins_target = 10,n_bins_independent=3
     n_bins_independent: int or None
         n_bins to be passed to KBinsDiscretizer for the dependent variable. it usefull when using a model like a DecisionTree without regularization.
         Binning avoids models with too much variance and thus potential overfit. Also helps in computation time when calculating for many features.
-    average : str
+    average: str
         `average` arg passed to sklearn roc_auc_score on multiclass case (when binarizing the regression problem, it yields a multiclas classification problem)    
     sample_weight:
         sample_weight column name. Passed to model.fit and roc_auc_score.    
@@ -676,13 +700,16 @@ def predictors(df, y, conditional = None,n_bins_target = 10,n_bins_independent=3
         If `None` there will be no sampling.
     dropna: bool
         whether to keep only rows where all features are not null        
-    output: str - potential values: "df", "list"
-        Control the type of the output. Either return a pandas.DataFrame (df) or a list with the score dicts
-    sorted: bool
-        Whether or not to sort the output dataframe/list by the ppscore
-    kwargs:
-        Other key-word arguments that shall be forwarded to the pps.score method,
-        e.g. `sample, `cross_validation, `random_seed, `invalid_score`, `catch_errors`
+    cross_validation : int
+        Number of iterations during cross-validation. This has the following implications:
+        For example, if the number is 4, then it is possible to detect patterns when there are at least 4 times the same observation. If the limit is increased, the required minimum observations also increase. This is important, because this is the limit when sklearn will throw an error and the PPS cannot be calculated
+    random_seed : int or `None`
+        Random seed for the parts of the calculation that require random numbers, e.g. shuffling or sampling.
+        If the value is set, the results will be reproducible. If the value is `None` a new random number is drawn at the start of each calculation.
+    invalid_score : any
+        The score that is returned when a calculation is invalid, e.g. because the data type was not supported.
+    catch_errors : bool
+        If `True` all errors will be catched and reported as `unknown_error` which ensures convenience. If `False` errors will be raised. This is helpful for inspecting and debugging errors.
 
     Returns
     -------
@@ -702,32 +729,26 @@ def predictors(df, y, conditional = None,n_bins_target = 10,n_bins_independent=3
         raise AssertionError(
             f"The dataframe has {len(df[[y]].columns)} columns with the same column name {y}\nPlease adjust the dataframe and make sure that only 1 column has the name {y}"
         )
+    
+    output = "df"
     if not output in ["df", "list"]:
         raise ValueError(
             f"""The 'output' argument should be one of ["df", "list"] but you passed: {output}\nPlease adjust your input to one of the valid values"""
         )
+    
+    sorted = True
     if not sorted in [True, False]:
         raise ValueError(
             f"""The 'sorted' argument should be one of [True, False] but you passed: {sorted}\nPlease adjust your input to one of the valid values"""
         )
 
-#     scores = [score(
-#         df=df,
-#         x=x,
-#         y=y,
-#         conditional=conditional,
-#         model=model,
-#         n_bins_target=n_bins_target,
-#         n_bins_independent=n_bins_independent,
-#         average=average,
-#         sample=sample,
-#         dropna=dropna,
-#         **kwargs) for x in tqdm(df.columns, disable = not verbose) if x != y]
     
     scores=[]
-    with tqdm(total=df.shape[1], position=0, leave=True, disable = not verbose) as pbar:       
+    n_cols_remove = len([i for i in [conditional,sample_weight] if not i is None])
+    
+    with tqdm(total=df.shape[1] - n_cols_remove - 1, position=0, leave=True, disable = not verbose) as pbar:       
         for x in df.columns:
-            if x != y:
+            if (x != sample_weight) and (x != conditional) and (x != y):
                 s = score(
                         df=df,
                         x=x,
@@ -738,23 +759,42 @@ def predictors(df, y, conditional = None,n_bins_target = 10,n_bins_independent=3
                         n_bins_independent=n_bins_independent,
                         average=average,
                         sample=sample,
+                        sample_weight = sample_weight,
                         dropna=dropna,
-                        **kwargs) 
+                        ) 
                 scores.append(s)
-            pbar.update()
+                pbar.update()
     
     return _format_list_of_dicts(scores=scores, output=output, sorted=sorted)
 
 
 
-def matrix(df, conditional = None,n_bins_target = 10, n_bins_independent=30, model = tree.DecisionTreeClassifier(), sample=5_000, dropna=True, average = "weighted",output="df", sorted=False, verbose = False, **kwargs):
+def matrix(df,
+           sample_weight = None,
+           conditional = None,
+           n_bins_target = 10,
+           n_bins_independent = 30,
+           average = "weighted",                   
+           model=tree.DecisionTreeClassifier(),
+           sample=5_000,
+           dropna=True,
+           cross_validation=4,
+           random_seed=123,
+           invalid_score=0,
+           catch_errors=True,
+           verbose = False,
+           **kwargs):
+    
     """
-    Calculate the Predictive Power Score (PPS) matrix for all columns in the dataframe.
+    Calculate the Predictive Power Score (PPS) of all the features in the dataframe
+    against a target column
 
     Parameters
     ----------
     df : pandas.DataFrame
-        The dataframe that contains the data    
+        The dataframe that contains the data
+    y : str
+        Name of the column y which acts as the target
     conditional : str or None
         Name of the column conditional which the predictive power score will be calculated conditioned on, that is P(Y|X, Conditional)    
     n_bins_target: int
@@ -771,13 +811,16 @@ def matrix(df, conditional = None,n_bins_target = 10, n_bins_independent=30, mod
         If `None` there will be no sampling.
     dropna: bool
         whether to keep only rows where all features are not null        
-    output: str - potential values: "df", "list"
-        Control the type of the output. Either return a pandas.DataFrame (df) or a list with the score dicts
-    sorted: bool
-        Whether or not to sort the output dataframe/list by the ppscore
-    kwargs:
-        Other key-word arguments that shall be forwarded to the pps.score method,
-        e.g. `sample, `cross_validation, `random_seed, `invalid_score`, `catch_errors`
+    cross_validation : int
+        Number of iterations during cross-validation. This has the following implications:
+        For example, if the number is 4, then it is possible to detect patterns when there are at least 4 times the same observation. If the limit is increased, the required minimum observations also increase. This is important, because this is the limit when sklearn will throw an error and the PPS cannot be calculated
+    random_seed : int or `None`
+        Random seed for the parts of the calculation that require random numbers, e.g. shuffling or sampling.
+        If the value is set, the results will be reproducible. If the value is `None` a new random number is drawn at the start of each calculation.
+    invalid_score : any
+        The score that is returned when a calculation is invalid, e.g. because the data type was not supported.
+    catch_errors : bool
+        If `True` all errors will be catched and reported as `unknown_error` which ensures convenience. If `False` errors will be raised. This is helpful for inspecting and debugging errors.
 
     Returns
     -------
@@ -785,49 +828,45 @@ def matrix(df, conditional = None,n_bins_target = 10, n_bins_independent=30, mod
         Either returns a tidy dataframe or a list of all the PPS dicts. This can be influenced
         by the output argument
     """
+    
     if not isinstance(df, pd.DataFrame):
         raise TypeError(
             f"The 'df' argument should be a pandas.DataFrame but you passed a {type(df)}\nPlease convert your input to a pandas.DataFrame"
         )
+    
+    output = "df"
     if not output in ["df", "list"]:
         raise ValueError(
             f"""The 'output' argument should be one of ["df", "list"] but you passed: {output}\nPlease adjust your input to one of the valid values"""
         )
+        
+    sorted = True
     if not sorted in [True, False]:
         raise ValueError(
             f"""The 'sorted' argument should be one of [True, False] but you passed: {sorted}\nPlease adjust your input to one of the valid values"""
         )
-
-#     scores = [score(
-#         df=df,
-#         x=x,
-#         y=y,
-#         conditional=conditional,
-#         n_bins_target=n_bins_target,
-#         n_bins_independent = n_bins_independent,
-#         model=model,
-#         average=average,
-#         sample=sample,
-#         dropna=dropna,
-#         **kwargs) for x in tqdm(df.columns, disable = not verbose) for y in df.columns]
     
     scores = []
-    with tqdm(total=df.shape[1]**2, position=0, leave=True, disable = not verbose) as pbar:       
+    n_cols_remove = len([i for i in [conditional,sample_weight] if not i is None])
+    with tqdm(total=(df.shape[1]-n_cols_remove)**2, position=0, leave=True, disable = not verbose) as pbar:       
         for x in df.columns:
-            for y in df.columns:
-                s = score(
-                    df=df,
-                    x=x,
-                    y=y,
-                    conditional=conditional,
-                    model=model,
-                    n_bins_target=n_bins_target,
-                    n_bins_independent=n_bins_independent,
-                    average=average,
-                    sample=sample,
-                    dropna=dropna,
-                    **kwargs) 
-                scores.append(s)
-                pbar.update()
+            if (x != sample_weight) and (x != conditional):                    
+                for y in df.columns:
+                    if (y != sample_weight) and (y != conditional):
+                        s = score(
+                            df=df,
+                            x=x,
+                            y=y,
+                            conditional=conditional,
+                            model=model,
+                            n_bins_target=n_bins_target,
+                            n_bins_independent=n_bins_independent,
+                            average=average,
+                            sample=sample,
+                            sample_weight = sample_weight,
+                            dropna=dropna,
+                            **kwargs) 
+                        scores.append(s)
+                        pbar.update()
 
     return _format_list_of_dicts(scores=scores, output=output, sorted=sorted)
