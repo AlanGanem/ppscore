@@ -142,6 +142,8 @@ def _calculate_model_cv_score_(
             labels=None
         )
 
+    baseline_score = 0.5
+    
     if not conditional is None:
         cond_preds = cross_val_predict(
                 clone(model), feature_input_cond, target_series.flatten(), cv=cross_validation, n_jobs=-1,
@@ -164,12 +166,13 @@ def _calculate_model_cv_score_(
                 labels=None
             )
         
+        baseline_score = cond_score #baseline is the 
         #subtract cond effect from joint effect
-        model_score = model_score - max(0, cond_score - 0.5)
+        #model_score = model_score - max(0, cond_score - 0.5)
 
         
     
-    return model_score
+    return model_score, baseline_score
 
 
 def _normalized_r2_score(model_r2, naive_r2):
@@ -193,18 +196,17 @@ def _normalized_auc_score(model_auc, baseline_auc):
     # # AUC ranges from 0 to 1
     # # 1 is best
     if model_auc < baseline_auc:
-        return 0
+        return 0        
     else:
-        scale_range = 1.0 - baseline_auc  # eg 0.3
-        auc_diff = model_auc - baseline_auc  # eg 0.1
+        scale_range = 1.0 - baseline_auc  # eg 0.3        
+        auc_diff = model_auc - baseline_auc
         return auc_diff / scale_range  # 0.1/0.3 = 0.33
 
 
 
 
-def _auc_normalizer(df, y, model_score, **kwargs):
+def _auc_normalizer(df, y, model_score, baseline_score = 0.5, **kwargs):
     "calculates the baseline score for y and derives the PPS. Custom score should follow the same API as f1_score"    
-    baseline_score = 0.5
     ppscore = _normalized_auc_score(model_score, baseline_score)
     return ppscore, baseline_score
 
@@ -413,7 +415,7 @@ def _score(
     task = _get_task(case_type, invalid_score)
 
     if case_type in ["classification", "regression"]:
-        model_score = _calculate_model_cv_score_(
+        model_score, baseline_score = _calculate_model_cv_score_(
             df,
             target=y,
             feature=x,
@@ -429,19 +431,22 @@ def _score(
         )
         # IDEA: the baseline_scores do sometimes change significantly, e.g. for F1 and thus change the PPS
         # we might want to calculate the baseline_score 10 times and use the mean in order to have less variance
+        unnormalized_ppscore = max(0, model_score - baseline_score)
         ppscore, baseline_score = task["score_normalizer"](
-            df, y, model_score, random_seed=random_seed
+            df, y, model_score, baseline_score=baseline_score, random_seed=random_seed
         )
     else:
         model_score = task["model_score"]
         baseline_score = task["baseline_score"]
         ppscore = task["ppscore"]
+        unnormalized_ppscore = max(0, model_score - baseline_score)
 
     return {
         "x": x,
         "y": y,
         "conditional":conditional,
         "ppscore": ppscore,
+        "unnormalized_ppscore":unnormalized_ppscore,
         "case": case_type,
         "is_valid_score": task["is_valid_score"],
         "metric": task["metric_name"],
@@ -570,8 +575,8 @@ def score(
         )
     except Exception as exception:
         if catch_errors:
-            case_type = "unknown_error"
-            task = _get_task(case_type, invalid_score)
+            case_type = exception#"unknown_error"
+            task = _get_task(case_type="unknown_error", invalid_score=invalid_score)
             return {
                 "x": x,
                 "y": y,
@@ -597,6 +602,7 @@ def _get_task(case_type, invalid_score):
             "model_score": invalid_score,
             "baseline_score": invalid_score,
             "ppscore": invalid_score,
+            "unnormalized_ppscore": np.nan,
             "metric_name": None,
             "metric_key": None,
             "model": None,
@@ -619,7 +625,8 @@ def _format_list_of_dicts(scores, output, sorted):
         df_columns = [
             "x",
             "y",
-            "ppscore",
+            "ppscore",            
+            "unnormalized_ppscore",
             "case",
             "is_valid_score",
             "metric",
