@@ -695,19 +695,38 @@ def predictors(df, y, conditional = None,n_bins_target = 10,n_bins_independent=3
             f"""The 'sorted' argument should be one of [True, False] but you passed: {sorted}\nPlease adjust your input to one of the valid values"""
         )
 
-    scores = [score(
-        df=df,
-        x=x,
-        y=y,
-        conditional=conditional,
-        model=model,
-        n_bins_target=n_bins_target,
-        n_bins_independent=n_bins_independent,
-        average=average,
-        sample=sample,
-        dropna=dropna,
-        **kwargs) for x in tqdm(df.columns, disable = not verbose) if x != y]
-
+#     scores = [score(
+#         df=df,
+#         x=x,
+#         y=y,
+#         conditional=conditional,
+#         model=model,
+#         n_bins_target=n_bins_target,
+#         n_bins_independent=n_bins_independent,
+#         average=average,
+#         sample=sample,
+#         dropna=dropna,
+#         **kwargs) for x in tqdm(df.columns, disable = not verbose) if x != y]
+    
+    scores=[]
+    with tqdm(total=df.shape[1], position=0, leave=True, disable = not verbose) as pbar:       
+        for x in df.columns:
+            if x != y:
+                s = score(
+                        df=df,
+                        x=x,
+                        y=y,
+                        conditional=conditional,
+                        model=model,
+                        n_bins_target=n_bins_target,
+                        n_bins_independent=n_bins_independent,
+                        average=average,
+                        sample=sample,
+                        dropna=dropna,
+                        **kwargs) 
+                scores.append(s)
+            pbar.update()
+    
     return _format_list_of_dicts(scores=scores, output=output, sorted=sorted)
 
 
@@ -763,17 +782,36 @@ def matrix(df, conditional = None,n_bins_target = 10, n_bins_independent=30, mod
             f"""The 'sorted' argument should be one of [True, False] but you passed: {sorted}\nPlease adjust your input to one of the valid values"""
         )
 
-    scores = [score(
-        df=df,
-        x=x,
-        y=y,
-        conditional=conditional,
-        n_bins_target=n_bins_target,
-        n_bins_independent = n_bins_independent,
-        model=model,
-        average=average,
-        sample=sample,
-        dropna=dropna,
-        **kwargs) for x in tqdm(df.columns, disable = not verbose) for y in df.columns]
+#     scores = [score(
+#         df=df,
+#         x=x,
+#         y=y,
+#         conditional=conditional,
+#         n_bins_target=n_bins_target,
+#         n_bins_independent = n_bins_independent,
+#         model=model,
+#         average=average,
+#         sample=sample,
+#         dropna=dropna,
+#         **kwargs) for x in tqdm(df.columns, disable = not verbose) for y in df.columns]
+    
+    scores = []
+    with tqdm(total=df.shape[1]**2, position=0, leave=True, disable = not verbose) as pbar:       
+        for x in df.columns:
+            for y in df.columns:
+                s = score(
+                    df=df,
+                    x=x,
+                    y=y,
+                    conditional=conditional,
+                    model=model,
+                    n_bins_target=n_bins_target,
+                    n_bins_independent=n_bins_independent,
+                    average=average,
+                    sample=sample,
+                    dropna=dropna,
+                    **kwargs) 
+                scores.append(s)
+                pbar.update()
 
     return _format_list_of_dicts(scores=scores, output=output, sorted=sorted)
