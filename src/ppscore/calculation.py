@@ -586,6 +586,7 @@ def score(
             return {
                 "x": x,
                 "y": y,
+                "conditional":conditional,
                 "ppscore": task["ppscore"],
                 "unnormalized_ppscore":task["unnormalized_ppscore"],
                 "case": case_type,
@@ -632,6 +633,7 @@ def _format_list_of_dicts(scores, output, sorted):
         df_columns = [
             "x",
             "y",
+            "conditional",
             "ppscore",            
             "unnormalized_ppscore",
             "case",
