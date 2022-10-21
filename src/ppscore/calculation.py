@@ -706,7 +706,7 @@ def predictors(df, y, conditional = None,n_bins_target = 10,n_bins_independent=3
         average=average,
         sample=sample,
         dropna=dropna,
-        **kwargs) for x in tqdm(df.columns, disable = not verbose) if column != y]
+        **kwargs) for x in tqdm(df.columns, disable = not verbose) if x != y]
 
     return _format_list_of_dicts(scores=scores, output=output, sorted=sorted)
 
