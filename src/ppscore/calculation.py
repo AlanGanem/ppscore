@@ -389,7 +389,11 @@ def _maybe_sample(df, sample, random_seed=None):
     if sample and len(df) > sample:
         # this is a problem if x or y have more than sample=5000 categories
         # TODO: dont sample when the problem occurs and show warning
-        df = df.sample(sample, random_state=random_seed, replace=False)
+        np.random.seed(random_seed)
+        ixs = np.random.choice(np.arange(len(df)), replace=False, size = sample)
+        ixs = np.sort(ixs)
+        #order idxs to keep ordering of df
+        df = df.iloc[ixs]
     return df
 
 
