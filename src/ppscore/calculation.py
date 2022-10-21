@@ -27,7 +27,7 @@ TO_BE_CALCULATED = -1
 
 
 def _calculate_model_cv_score_(
-    df, target, feature, conditional, n_bins, average, task, model, cross_validation, random_seed, sample_weight = None, **kwargs
+    df, target, feature, conditional, n_bins_target, n_bins_independent, average, task, model, cross_validation, random_seed, sample_weight = None, **kwargs
 ):
     "Calculates the mean model score based on cross-validation"
     # Sources about the used methods:
@@ -53,8 +53,8 @@ def _calculate_model_cv_score_(
         target_series = df[target].values.flatten()
         scoring_method = "predict_proba"
     else:        
-        if len(np.unique(df[target])) > n_bins:
-            target_series = preprocessing.KBinsDiscretizer(n_bins=n_bins, encode='ordinal', strategy='quantile').fit_transform(df[[target]]).flatten()
+        if len(np.unique(df[target])) > n_bins_target:
+            target_series = preprocessing.KBinsDiscretizer(n_bins=n_bins_target, encode='ordinal', strategy='quantile').fit_transform(df[[target]]).flatten()
         else:
             target_series = label_encoder.fit_transform(df[[target]]).flatten()
         scoring_method = "predict_proba"
@@ -72,9 +72,13 @@ def _calculate_model_cv_score_(
         array = df[feature].values
         if not isinstance(array, np.ndarray):  # e.g Int64 IntegerArray
             array = array.to_numpy()
-        if len(np.unique(array)) > n_bins:
-            # binarize to avoid overfitting        
-            feature_input = preprocessing.KBinsDiscretizer(n_bins=n_bins, encode='ordinal', strategy='quantile').fit_transform(array.reshape(-1, 1))
+        
+        if not n_bins_independent is None:
+            if len(np.unique(array)) > n_bins_independent:
+                # binarize to avoid overfitting        
+                feature_input = preprocessing.KBinsDiscretizer(n_bins=n_bins_independent, encode='ordinal', strategy='quantile').fit_transform(array.reshape(-1, 1))
+            else:
+                feature_input = array.reshape(-1, 1)
         else:
             feature_input = array.reshape(-1, 1)
         
@@ -92,9 +96,14 @@ def _calculate_model_cv_score_(
             array = df[conditional].values
             if not isinstance(array, np.ndarray):  # e.g Int64 IntegerArray
                 array = array.to_numpy()
-            if len(np.unique(array)) > n_bins:
-                # binarize to avoid overfitting        
-                feature_input_cond = preprocessing.KBinsDiscretizer(n_bins=n_bins, encode='ordinal', strategy='quantile').fit_transform(array.reshape(-1, 1))
+            
+            if not n_bins_independent is None:
+                
+                if len(np.unique(array)) > n_bins_independent:
+                    # binarize to avoid overfitting        
+                    feature_input_cond = preprocessing.KBinsDiscretizer(n_bins=n_bins_independent, encode='ordinal', strategy='quantile').fit_transform(array.reshape(-1, 1))
+                else:
+                    feature_input_cond = array.reshape(-1, 1)
             else:
                 feature_input_cond = array.reshape(-1, 1)
             
@@ -388,7 +397,7 @@ def _is_column_in_df(column, df):
 
 
 def _score(
-    df, x, y, conditional,n_bins, average, task, sample, model, cross_validation, random_seed, invalid_score, catch_errors, sample_weight, **kwargs
+    df, x, y, conditional,n_bins_target, n_bins_independent, average, task, sample, model, cross_validation, random_seed, invalid_score, catch_errors, sample_weight, **kwargs
 ):
     df, case_type = _determine_case_and_prepare_df(
         df, x, y, conditional = conditional, sample=sample, random_seed=random_seed
@@ -401,7 +410,8 @@ def _score(
             target=y,
             feature=x,
             conditional=conditional,
-            n_bins = n_bins,
+            n_bins_target = n_bins_target,
+            n_bins_independent = n_bins_independent,
             average = average,
             task=task,
             model=model,
@@ -438,7 +448,8 @@ def score(
     x,
     y,
     conditional = None,
-    n_bins = 30,
+    n_bins_target = 10,
+    n_bins_independent = 30,
     average = "weighted",
     sample_weight = None,
     task=NOT_SUPPORTED_ANYMORE,
@@ -467,9 +478,11 @@ def score(
         Name of the column y which acts as the target    
     conditional : str or None
         Name of the column conditional which the predictive power score will be calculated conditioned on, that is P(Y|X, Conditional)    
-    n_bins: int
-        n_bins to be passed to KBinsDiscretizer, to transform a regression problem into a classification one. Also used to binarize continuous features
-        to avoid overfitting with trees.    
+    n_bins_target: int
+        n_bins to be passed to KBinsDiscretizer for the target variable, to transform a regression problem into a classification one.     
+    n_bins_independent: int or None
+        n_bins to be passed to KBinsDiscretizer for the dependent variable. it usefull when using a model like a DecisionTree without regularization.
+        Binning avoids models with too much variance and thus potential overfit. Also helps in computation time when calculating for many features.
     average: str
         `average` arg passed to sklearn roc_auc_score on multiclass case (when binarizing the regression problem, it yields a multiclas classification problem)    
     sample_weight:
@@ -532,7 +545,8 @@ def score(
             x=x,
             y=y,
             conditional=conditional,
-            n_bins=n_bins,
+            n_bins_target=n_bins_target,
+            n_bins_independent=n_bins_independent,
             average=average,
             task=task,
             sample=sample,
@@ -608,7 +622,7 @@ def _format_list_of_dicts(scores, output, sorted):
     return scores
 
 
-def predictors(df, y, conditional = None,n_bins = 30, model=tree.DecisionTreeClassifier(), sample=5_000, average = "weighted",output="df", sorted=True, verbose = False, **kwargs):
+def predictors(df, y, conditional = None,n_bins_target = 10,n_bins_independent=30, model=tree.DecisionTreeClassifier(), sample=5_000, average = "weighted",output="df", sorted=True, verbose = False, **kwargs):
     """
     Calculate the Predictive Power Score (PPS) of all the features in the dataframe
     against a target column
@@ -621,9 +635,11 @@ def predictors(df, y, conditional = None,n_bins = 30, model=tree.DecisionTreeCla
         Name of the column y which acts as the target
     conditional : str or None
         Name of the column conditional which the predictive power score will be calculated conditioned on, that is P(Y|X, Conditional)    
-    n_bins : int
-        n_bins to be passed to KBinsDiscretizer, to transform a regression problem into a classification one. Also used to binarize continuous features
-        to avoid overfitting with trees.    
+    n_bins_target: int
+        n_bins to be passed to KBinsDiscretizer for the target variable, to transform a regression problem into a classification one.     
+    n_bins_independent: int or None
+        n_bins to be passed to KBinsDiscretizer for the dependent variable. it usefull when using a model like a DecisionTree without regularization.
+        Binning avoids models with too much variance and thus potential overfit. Also helps in computation time when calculating for many features.
     average : str
         `average` arg passed to sklearn roc_auc_score on multiclass case (when binarizing the regression problem, it yields a multiclas classification problem)    
     sample_weight:
@@ -672,7 +688,8 @@ def predictors(df, y, conditional = None,n_bins = 30, model=tree.DecisionTreeCla
         y=y,
         conditional=conditional,
         model=model,
-        n_bins=n_bins,
+        n_bins_target=n_bins_target,
+        n_bins_independent=n_bins_independent,
         average=average,
         sample=sample,
         **kwargs) for column in tqdm(df.columns, disable = not verbose) if column != y]
@@ -681,7 +698,7 @@ def predictors(df, y, conditional = None,n_bins = 30, model=tree.DecisionTreeCla
 
 
 
-def matrix(df, conditional = None,n_bins = 30, model = tree.DecisionTreeClassifier(), sample=5_000, average = "weighted",output="df", sorted=False, verbose = False, **kwargs):
+def matrix(df, conditional = None,n_bins_target = 10, n_bins_independent=30, model = tree.DecisionTreeClassifier(), sample=5_000, average = "weighted",output="df", sorted=False, verbose = False, **kwargs):
     """
     Calculate the Predictive Power Score (PPS) matrix for all columns in the dataframe.
 
@@ -691,9 +708,11 @@ def matrix(df, conditional = None,n_bins = 30, model = tree.DecisionTreeClassifi
         The dataframe that contains the data    
     conditional : str or None
         Name of the column conditional which the predictive power score will be calculated conditioned on, that is P(Y|X, Conditional)    
-    n_bins: int
-        n_bins to be passed to KBinsDiscretizer, to transform a regression problem into a classification one. Also used to binarize continuous features
-        to avoid overfitting with trees.    
+    n_bins_target: int
+        n_bins to be passed to KBinsDiscretizer for the target variable, to transform a regression problem into a classification one.     
+    n_bins_independent: int or None
+        n_bins to be passed to KBinsDiscretizer for the dependent variable. it usefull when using a model like a DecisionTree without regularization.
+        Binning avoids models with too much variance and thus potential overfit. Also helps in computation time when calculating for many features.
     average: str
         `average` arg passed to sklearn roc_auc_score on multiclass case (when binarizing the regression problem, it yields a multiclas classification problem)    
     sample_weight:
@@ -733,7 +752,8 @@ def matrix(df, conditional = None,n_bins = 30, model = tree.DecisionTreeClassifi
         x=x,
         y=y,
         conditional=conditional,
-        n_bins=n_bins,
+        n_bins_target=n_bins_target,
+        n_bins_independent = n_bins_independent,
         model=model,
         average=average,
         sample=sample,
