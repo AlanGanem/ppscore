@@ -21,9 +21,65 @@ from pandas.api.types import (
     is_timedelta64_dtype,
 )
 
+from sklearn.model_selection import TimeSeriesSplit
+
+
 
 NOT_SUPPORTED_ANYMORE = "NOT_SUPPORTED_ANYMORE"
 TO_BE_CALCULATED = -1
+
+def cross_val_predict_time_series(
+    estimator,
+    X,
+    y=None,
+    *,
+    groups=None,
+    cv=None,
+    n_jobs=None,
+    verbose=0,
+    fit_params=None,
+    pre_dispatch='2*n_jobs',
+    method='predict',
+):
+    """
+    Allows cross_val_predict for TimeSeriesSplit cv splitter. it basically pads to NaN the samples that are not
+    used to predictions (like the first fold of a out of time kfold). cv must be an instance of TimeSeriesSplit of sklearn or
+    a a list of containers following the same format as cv.split(X) results.
+    
+    params descriptions can be found in cross_val_predict docs
+    
+    """
+    
+    if isinstance(cv, TimeSeriesSplit):
+        splits = list(cv.split(X))           
+    elif isinstance(cv, (list, tuple)):
+        splits = cv    
+    else:
+        raise TypeError(f"cv must be instance of sklearn.model_selection._split.TimeSeriesSplit or container, got {type(cv)}")
+    
+    #ads train with first partiton and test with the datapoints that are not included, just to make it a valid permutation
+    test_indices = np.concatenate([test for _, test in splits])
+    missing_indexes = np.setdiff1d(np.arange(len(X)), test_indices)
+    splits = splits + [(splits[0][0], missing_indexes)]
+    
+    results = cross_val_predict(
+        estimator = estimator,
+        X = X,
+        y=y,
+        groups=groups,
+        cv=splits,
+        n_jobs=n_jobs,
+        verbose=verbose,
+        fit_params=fit_params,
+        pre_dispatch=pre_dispatch,
+        method=method,
+    )
+    
+    #fill with NaNs the missing indexes
+    results = results.astype(float)
+    results[missing_indexes] = np.nan
+    return results
+
 
 
 def _calculate_model_cv_score_(
@@ -34,6 +90,13 @@ def _calculate_model_cv_score_(
     # https://scikit-learn.org/stable/modules/tree.html
     # https://scikit-learn.org/stable/modules/cross_validation.html
     # https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.cross_val_score.html
+    
+    #use custom crossval for time series if cv is TimeSeriesSplit
+    if isinstance(cross_validation, TimeSeriesSplit):
+        cv_func = cross_val_predict_time_series
+    else:
+        cv_func = cross_val_predict
+        
     if conditional in [target,feature]:
         conditional = None
     metric = task["metric_key"]
@@ -43,8 +106,7 @@ def _calculate_model_cv_score_(
     # if there is a strong pattern in the rows eg 0,0,0,0,1,1,1,1
     # then this will lead to problems because the first cv sees mostly 0 and the later 1
     # this approach might be wrong for timeseries because it might leak information
-    #df = df.sample(frac=1, random_state=random_seed, replace=False)
-
+    #df = df.sample(frac=1, random_state=random_seed, replace=False)    
     scoring_method = None
     # preprocess target
     label_encoder = preprocessing.LabelEncoder()
@@ -121,7 +183,7 @@ def _calculate_model_cv_score_(
     sample_weight = None if sample_weight is None else df[sample_weight].values.flatten()
     fit_params = {"sample_weight":sample_weight} if not sample_weight is None else None
 
-    preds = cross_val_predict(
+    preds = cv_func(
             clone(model), feature_input, target_series.flatten(), cv=cross_validation, n_jobs=-1,
             fit_params=fit_params, pre_dispatch='2*n_jobs', method=scoring_method)
     
@@ -131,11 +193,14 @@ def _calculate_model_cv_score_(
         elif preds.shape[1] == 1:
             preds = preds[:,0]
 
+    preds_nan_msk = np.isnan(preds)
+    if len(preds_nan_msk.shape) > 1:
+        preds_nan_msk = ~np.any(preds_nan_msk, axis = 1)
     model_score = roc_auc_score(
-            target_series,
-            preds,
+            target_series[preds_nan_msk],
+            preds[preds_nan_msk],
             average=average,
-            sample_weight=sample_weight,
+            sample_weight=sample_weight if sample_weight is None else sample_weight[preds_nan_msk],
             max_fpr=None,
             multi_class="ovr",
             labels=None
@@ -144,11 +209,15 @@ def _calculate_model_cv_score_(
     baseline_score = 0.5
     
     if not conditional is None:
-        cond_preds = cross_val_predict(
+        cond_preds = cv_func(
                 clone(model), feature_input_cond, target_series.flatten(), cv=cross_validation, n_jobs=-1,
                 fit_params=fit_params, pre_dispatch='2*n_jobs', method=scoring_method)
 
 
+        cond_preds_nan_msk = np.isnan(cond_preds)
+        if len(cond_preds_nan_msk.shape) > 1:
+            cond_preds_nan_msk = ~np.any(cond_preds_nan_msk, axis = 1)
+            
         if (len(labels) <= 2) and (cond_preds.ndim > 1):
             if cond_preds.shape[1] == 2:
                 cond_preds = cond_preds[:,1]
@@ -156,10 +225,10 @@ def _calculate_model_cv_score_(
                 cond_preds = cond_preds.flatten()
         
         cond_score = roc_auc_score(
-                target_series,
-                cond_preds,
+                target_series[cond_preds_nan_msk],
+                cond_preds[cond_preds_nan_msk],
                 average=average,
-                sample_weight=sample_weight,
+                sample_weight=sample_weight if sample_weight is None else sample_weight[cond_preds_nan_msk],
                 max_fpr=None,
                 multi_class="ovr",
                 labels=None
@@ -761,6 +830,8 @@ def predictors(df,
                         sample=sample,
                         sample_weight = sample_weight,
                         dropna=dropna,
+                        catch_errors = catch_errors,
+                        **kwargs
                         ) 
                 scores.append(s)
                 pbar.update()
@@ -865,6 +936,7 @@ def matrix(df,
                             sample=sample,
                             sample_weight = sample_weight,
                             dropna=dropna,
+                            catch_errors = catch_errors,
                             **kwargs) 
                         scores.append(s)
                         pbar.update()
