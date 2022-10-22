@@ -193,9 +193,10 @@ def _calculate_model_cv_score_(
         elif preds.shape[1] == 1:
             preds = preds[:,0]
 
-    preds_nan_msk = np.isnan(preds)
+    preds_nan_msk = ~np.isnan(preds)
     if len(preds_nan_msk.shape) > 1:
-        preds_nan_msk = ~np.any(preds_nan_msk, axis = 1)
+        preds_nan_msk = ~np.any(~preds_nan_msk, axis = 1)
+        
     model_score = roc_auc_score(
             target_series[preds_nan_msk],
             preds[preds_nan_msk],
@@ -214,9 +215,9 @@ def _calculate_model_cv_score_(
                 fit_params=fit_params, pre_dispatch='2*n_jobs', method=scoring_method)
 
 
-        cond_preds_nan_msk = np.isnan(cond_preds)
+        cond_preds_nan_msk = ~np.isnan(cond_preds)
         if len(cond_preds_nan_msk.shape) > 1:
-            cond_preds_nan_msk = ~np.any(cond_preds_nan_msk, axis = 1)
+            cond_preds_nan_msk = ~np.any(~cond_preds_nan_msk, axis = 1)
             
         if (len(labels) <= 2) and (cond_preds.ndim > 1):
             if cond_preds.shape[1] == 2:
