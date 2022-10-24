@@ -511,7 +511,7 @@ def _score(
             model=model,
             cross_validation=cross_validation,
             random_seed=random_seed,
-            sample_weight = sample_weight
+            sample_weight = sample_weight,
             cv_n_jobs = cv_n_jobs,
         )
         # IDEA: the baseline_scores do sometimes change significantly, e.g. for F1 and thus change the PPS
@@ -860,7 +860,7 @@ def matrix(df,
            invalid_score=0,
            catch_errors=True,
            verbose = False,
-           cv_n_jobs=cv_n_jobs,
+           cv_n_jobs=None,
            **kwargs):
     
     """
