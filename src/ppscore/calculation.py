@@ -83,7 +83,7 @@ def cross_val_predict_time_series(
 
 
 def _calculate_model_cv_score_(
-    df, target, feature, conditional, n_bins_target, n_bins_independent, average, task, model, cross_validation, random_seed, sample_weight = None, **kwargs
+    df, target, feature, conditional, n_bins_target, n_bins_independent, average, task, model, cross_validation, random_seed, sample_weight = None, cv_n_jobs = None,  **kwargs
 ):
     "Calculates the mean model score based on cross-validation"
     # Sources about the used methods:
@@ -184,7 +184,7 @@ def _calculate_model_cv_score_(
     fit_params = {"sample_weight":sample_weight} if not sample_weight is None else None
 
     preds = cv_func(
-            clone(model), feature_input, target_series.flatten(), cv=cross_validation, n_jobs=-1,
+            clone(model), feature_input, target_series.flatten(), cv=cross_validation, n_jobs=cv_n_jobs,
             fit_params=fit_params, pre_dispatch='2*n_jobs', method=scoring_method)
     
     if (len(labels) <= 2) and (preds.ndim > 1):
@@ -211,7 +211,7 @@ def _calculate_model_cv_score_(
     
     if not conditional is None:
         cond_preds = cv_func(
-                clone(model), feature_input_cond, target_series.flatten(), cv=cross_validation, n_jobs=-1,
+                clone(model), feature_input_cond, target_series.flatten(), cv=cross_validation, n_jobs=cv_n_jobs,
                 fit_params=fit_params, pre_dispatch='2*n_jobs', method=scoring_method)
 
 
@@ -491,7 +491,7 @@ def _is_column_in_df(column, df):
 
 
 def _score(
-    df, x, y, conditional,n_bins_target, n_bins_independent, average, task, sample, dropna, model, cross_validation, random_seed, invalid_score, catch_errors, sample_weight, **kwargs
+    df, x, y, conditional,n_bins_target, n_bins_independent, average, task, sample, dropna, model, cross_validation, random_seed, invalid_score, catch_errors, sample_weight,cv_n_jobs, **kwargs
 ):
     df, case_type = _determine_case_and_prepare_df(
         df, x, y, sample_weight = sample_weight, conditional = conditional, sample=sample, dropna= dropna, random_seed=random_seed
@@ -512,6 +512,7 @@ def _score(
             cross_validation=cross_validation,
             random_seed=random_seed,
             sample_weight = sample_weight
+            cv_n_jobs = cv_n_jobs,
         )
         # IDEA: the baseline_scores do sometimes change significantly, e.g. for F1 and thus change the PPS
         # we might want to calculate the baseline_score 10 times and use the mean in order to have less variance
@@ -547,7 +548,7 @@ def score(
     sample_weight = None,
     conditional = None,
     n_bins_target = 10,
-    n_bins_independent = 30,
+    n_bins_independent = None,
     average = "weighted",    
     task=NOT_SUPPORTED_ANYMORE,
     model=tree.DecisionTreeClassifier(),
@@ -557,6 +558,7 @@ def score(
     random_seed=123,
     invalid_score=0,
     catch_errors=True,
+    cv_n_jobs = None,
     **kwargs,
 ):
     """
@@ -657,6 +659,7 @@ def score(
             invalid_score=invalid_score,
             catch_errors=catch_errors,
             sample_weight = sample_weight,
+            cv_n_jobs=cv_n_jobs,
         )
     except Exception as exception:
         if catch_errors:
@@ -733,7 +736,7 @@ def predictors(df,
                sample_weight = None,
                conditional = None,
                n_bins_target = 10,
-               n_bins_independent = 30,
+               n_bins_independent = None,
                average = "weighted",                   
                model=tree.DecisionTreeClassifier(),
                sample=5_000,
@@ -743,6 +746,7 @@ def predictors(df,
                invalid_score=0,
                catch_errors=True,
                verbose = False,
+               cv_n_jobs = None,
                **kwargs):
     """
     Calculate the Predictive Power Score (PPS) of all the features in the dataframe
@@ -832,6 +836,7 @@ def predictors(df,
                         sample_weight = sample_weight,
                         dropna=dropna,
                         catch_errors = catch_errors,
+                        cv_n_jobs = cv_n_jobs,
                         **kwargs
                         ) 
                 scores.append(s)
@@ -845,7 +850,7 @@ def matrix(df,
            sample_weight = None,
            conditional = None,
            n_bins_target = 10,
-           n_bins_independent = 30,
+           n_bins_independent = None,
            average = "weighted",                   
            model=tree.DecisionTreeClassifier(),
            sample=5_000,
@@ -855,6 +860,7 @@ def matrix(df,
            invalid_score=0,
            catch_errors=True,
            verbose = False,
+           cv_n_jobs=cv_n_jobs,
            **kwargs):
     
     """
@@ -938,6 +944,7 @@ def matrix(df,
                             sample_weight = sample_weight,
                             dropna=dropna,
                             catch_errors = catch_errors,
+                            cv_n_jobs = cv_n_jobs,
                             **kwargs) 
                         scores.append(s)
                         pbar.update()
