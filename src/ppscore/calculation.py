@@ -472,7 +472,7 @@ def _maybe_sample(df, sample, random_seed=None):
     pandas.DataFrame
         DataFrame after potential sampling
     """
-    if sample and len(df) > sample:
+    if sample and (len(df) > sample):
         # this is a problem if x or y have more than sample=5000 categories
         # TODO: dont sample when the problem occurs and show warning
         np.random.seed(random_seed)
@@ -817,6 +817,10 @@ def predictors(df,
         )
 
     
+    if not dropna:
+        #sample first to avoid overhead of sampling sub dfs
+        df = _maybe_sample(df, sample, random_seed=random_seed)
+        
     scores=[]
     n_cols_remove = len([i for i in [conditional,sample_weight] if not i is None])
     
@@ -923,6 +927,10 @@ def matrix(df,
         raise ValueError(
             f"""The 'sorted' argument should be one of [True, False] but you passed: {sorted}\nPlease adjust your input to one of the valid values"""
         )
+    
+    if not dropna:
+        #sample first to avoid overhead of sampling sub dfs
+        df = _maybe_sample(df, sample, random_seed=random_seed)
     
     scores = []
     n_cols_remove = len([i for i in [conditional,sample_weight] if not i is None])
