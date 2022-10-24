@@ -23,6 +23,7 @@ from pandas.api.types import (
 
 from sklearn.model_selection import TimeSeriesSplit
 
+from preprocessing import RobustKBinsDiscretizer, RobustOneHotEncoder
 
 
 NOT_SUPPORTED_ANYMORE = "NOT_SUPPORTED_ANYMORE"
@@ -116,7 +117,7 @@ def _calculate_model_cv_score_(
         scoring_method = "predict_proba"
     else:        
         if len(np.unique(df[target])) > n_bins_target:
-            target_series = preprocessing.KBinsDiscretizer(n_bins=n_bins_target, encode='ordinal', strategy='quantile').fit_transform(df[[target]]).flatten()
+            target_series = RobustKBinsDiscretizer(n_bins=n_bins_target, encode='ordinal', handle_nan = 'handle', strategy='quantile').fit_transform(df[[target]]).flatten()
         else:
             target_series = label_encoder.fit_transform(df[[target]]).flatten()
         scoring_method = "predict_proba"
@@ -125,7 +126,13 @@ def _calculate_model_cv_score_(
     
     # preprocess feature
     if _dtype_represents_categories(df[feature]):
-        one_hot_encoder = preprocessing.OneHotEncoder()
+        one_hot_encoder = RobustOneHotEncoder(
+            handle_unknown = 'ignore',
+            sparse=True,
+            nan_value = np.nan,
+            handle_nan = 'handle',
+        )
+        
         array = df[feature].__array__()
         sparse_matrix = one_hot_encoder.fit_transform(array.reshape(-1, 1))
         feature_input = sparse_matrix
@@ -138,7 +145,7 @@ def _calculate_model_cv_score_(
         if not n_bins_independent is None:
             if len(np.unique(array)) > n_bins_independent:
                 # binarize to avoid overfitting        
-                feature_input = preprocessing.KBinsDiscretizer(n_bins=n_bins_independent, encode='ordinal', strategy='quantile').fit_transform(array.reshape(-1, 1))
+                feature_input = RobustKBinsDiscretizer(n_bins=n_bins_target, encode='ordinal', handle_nan = 'handle', strategy='quantile').fit_transform(array.reshape(-1, 1))
             else:
                 feature_input = array.reshape(-1, 1)
         else:
@@ -163,7 +170,7 @@ def _calculate_model_cv_score_(
                 
                 if len(np.unique(array)) > n_bins_independent:
                     # binarize to avoid overfitting        
-                    feature_input_cond = preprocessing.KBinsDiscretizer(n_bins=n_bins_independent, encode='ordinal', strategy='quantile').fit_transform(array.reshape(-1, 1))
+                    feature_input_cond = RobustKBinsDiscretizer(n_bins=n_bins_target, encode='ordinal', handle_nan = 'handle', strategy='quantile').fit_transform(array.reshape(-1, 1))
                 else:
                     feature_input_cond = array.reshape(-1, 1)
             else:
@@ -580,9 +587,9 @@ def score(
     conditional : str or None
         Name of the column conditional which the predictive power score will be calculated conditioned on, that is P(Y|X, Conditional)    
     n_bins_target: int
-        n_bins to be passed to KBinsDiscretizer for the target variable, to transform a regression problem into a classification one.     
+        n_bins to be passed to RobustKBinsDiscretizer(n_bins=n_bins_target, encode='ordinal', handle_nan = 'handle', strategy='quantile') for the target variable, to transform a regression problem into a classification one.     
     n_bins_independent: int or None
-        n_bins to be passed to KBinsDiscretizer for the dependent variable. it usefull when using a model like a DecisionTree without regularization.
+        n_bins to be passed to RobustKBinsDiscretizer(n_bins=n_bins_target, encode='ordinal', handle_nan = 'handle', strategy='quantile') for the dependent variable. it usefull when using a model like a DecisionTree without regularization.
         Binning avoids models with too much variance and thus potential overfit. Also helps in computation time when calculating for many features.
     average: str
         `average` arg passed to sklearn roc_auc_score on multiclass case (when binarizing the regression problem, it yields a multiclas classification problem)    
@@ -761,9 +768,9 @@ def predictors(df,
     conditional : str or None
         Name of the column conditional which the predictive power score will be calculated conditioned on, that is P(Y|X, Conditional)    
     n_bins_target: int
-        n_bins to be passed to KBinsDiscretizer for the target variable, to transform a regression problem into a classification one.     
+        n_bins to be passed to RobustKBinsDiscretizer(n_bins=n_bins_target, encode='ordinal', handle_nan = 'handle', strategy='quantile') for the target variable, to transform a regression problem into a classification one.     
     n_bins_independent: int or None
-        n_bins to be passed to KBinsDiscretizer for the dependent variable. it usefull when using a model like a DecisionTree without regularization.
+        n_bins to be passed to RobustKBinsDiscretizer(n_bins=n_bins_target, encode='ordinal', handle_nan = 'handle', strategy='quantile') for the dependent variable. it usefull when using a model like a DecisionTree without regularization.
         Binning avoids models with too much variance and thus potential overfit. Also helps in computation time when calculating for many features.
     average: str
         `average` arg passed to sklearn roc_auc_score on multiclass case (when binarizing the regression problem, it yields a multiclas classification problem)    
@@ -880,9 +887,9 @@ def matrix(df,
     conditional : str or None
         Name of the column conditional which the predictive power score will be calculated conditioned on, that is P(Y|X, Conditional)    
     n_bins_target: int
-        n_bins to be passed to KBinsDiscretizer for the target variable, to transform a regression problem into a classification one.     
+        n_bins to be passed to RobustKBinsDiscretizer(n_bins=n_bins_target, encode='ordinal', handle_nan = 'handle', strategy='quantile') for the target variable, to transform a regression problem into a classification one.     
     n_bins_independent: int or None
-        n_bins to be passed to KBinsDiscretizer for the dependent variable. it usefull when using a model like a DecisionTree without regularization.
+        n_bins to be passed to RobustKBinsDiscretizer(n_bins=n_bins_target, encode='ordinal', handle_nan = 'handle', strategy='quantile') for the dependent variable. it usefull when using a model like a DecisionTree without regularization.
         Binning avoids models with too much variance and thus potential overfit. Also helps in computation time when calculating for many features.
     average: str
         `average` arg passed to sklearn roc_auc_score on multiclass case (when binarizing the regression problem, it yields a multiclas classification problem)    
