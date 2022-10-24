@@ -6,6 +6,8 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 from sklearn.utils import check_array
 
+import warnings
+
 class RobustKBinsDiscretizer(KBinsDiscretizer):
     
     #TODO: allow extrapolation behaviour in the extremes if desired (not sure if conceptually possible)
