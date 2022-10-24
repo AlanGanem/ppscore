@@ -23,7 +23,7 @@ from pandas.api.types import (
 
 from sklearn.model_selection import TimeSeriesSplit
 
-from .preprocessing import RobustKBinsDiscretizer, RobustOneHotEncoder
+from .preprocessing import RobustKBinsDiscretizer
 
 
 NOT_SUPPORTED_ANYMORE = "NOT_SUPPORTED_ANYMORE"
@@ -126,12 +126,8 @@ def _calculate_model_cv_score_(
     
     # preprocess feature
     if _dtype_represents_categories(df[feature]):
-        one_hot_encoder = RobustOneHotEncoder(
-            handle_unknown = 'ignore',
-            sparse=True,
-            nan_value = np.nan,
-            handle_nan = 'handle',
-        )
+        
+        one_hot_encoder = preprocessing.OneHotEncoder(handle_unknown = 'ignore')
         
         array = df[feature].__array__()
         sparse_matrix = one_hot_encoder.fit_transform(array.reshape(-1, 1))
@@ -155,7 +151,7 @@ def _calculate_model_cv_score_(
     #preprocess conditional 
     if not conditional is None:
         if _dtype_represents_categories(df[conditional]):
-            one_hot_encoder = preprocessing.OneHotEncoder()
+            one_hot_encoder = preprocessing.OneHotEncoder(handle_unknown = 'ignore')
             array = df[conditional].__array__()
             feature_input_cond = one_hot_encoder.fit_transform(array.reshape(-1, 1))
             feature_input = sparse.hstack([feature_input_cond, feature_input])
