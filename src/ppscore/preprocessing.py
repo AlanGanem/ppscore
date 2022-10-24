@@ -5,7 +5,7 @@ from sklearn.cluster import KMeans
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 from sklearn.utils import check_array
-from sklearn.utils import _encode, _check_unknown, _unique, _get_counts
+from sklearn.utils._encode import _encode, _check_unknown, _unique, _get_counts
 
 class RobustKBinsDiscretizer(KBinsDiscretizer):
     
