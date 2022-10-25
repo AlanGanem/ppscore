@@ -23,7 +23,7 @@ from pandas.api.types import (
 
 from sklearn.model_selection import TimeSeriesSplit
 
-from preprocessing import RobustKBinsDiscretizer
+from .preprocessing import RobustKBinsDiscretizer
 
 
 NOT_SUPPORTED_ANYMORE = "NOT_SUPPORTED_ANYMORE"
