@@ -23,7 +23,7 @@ from pandas.api.types import (
 
 from sklearn.model_selection import TimeSeriesSplit
 
-from .preprocessing import RobustKBinsDiscretizer
+from preprocessing import RobustKBinsDiscretizer
 
 
 NOT_SUPPORTED_ANYMORE = "NOT_SUPPORTED_ANYMORE"
@@ -401,10 +401,16 @@ def _determine_case_and_prepare_df(df, x, y, sample_weight = None,  conditional 
     # IDEA: log.warning when values have been dropped
     # dro duplciated columns
     df = df.loc[:,~df.columns.duplicated()].copy()
-    if dropna:
-        df = df.dropna()    
-    else:
+    
+    if dropna == "all":
+        df = df.dropna()
+    elif dropna == "target":
+        df = df.dropna(subset = [y])
+    elif dropna is None:
         pass
+    else:
+        raise ValueError(f"dropna should be one of ['all','target',None], got {dropna}")
+            
     
     if len(df) == 0:
         return df, "empty_dataframe_after_dropping_na"
@@ -556,7 +562,7 @@ def score(
     task=NOT_SUPPORTED_ANYMORE,
     model=tree.DecisionTreeClassifier(),
     sample=5_000,
-    dropna=True,
+    dropna="all",
     cross_validation=4,
     random_seed=123,
     invalid_score=0,
@@ -594,8 +600,13 @@ def score(
     sample : int or `None`
         Number of rows for sampling. The sampling decreases the calculation time of the PPS.
         If `None` there will be no sampling.
-    dropna: bool
-        whether to keep only rows where all features are not null        
+    
+    dropna: ["all", "target", None]
+        whether to keep only rows where all features are not null. 
+            - `target` removes only null targets, keeping X nulls in place
+            - `all` removes all nulls in x,y and possibly conditional
+            - None keeps all nulls in all columns
+            
     cross_validation : int
         Number of iterations during cross-validation. This has the following implications:
         For example, if the number is 4, then it is possible to detect patterns when there are at least 4 times the same observation. If the limit is increased, the required minimum observations also increase. This is important, because this is the limit when sklearn will throw an error and the PPS cannot be calculated
@@ -743,7 +754,7 @@ def predictors(df,
                average = "weighted",                   
                model=tree.DecisionTreeClassifier(),
                sample=5_000,
-               dropna=True,
+               dropna="all",
                cross_validation=4,
                random_seed=123,
                invalid_score=0,
@@ -775,8 +786,13 @@ def predictors(df,
     sample : int or `None`
         Number of rows for sampling. The sampling decreases the calculation time of the PPS.
         If `None` there will be no sampling.
-    dropna: bool
-        whether to keep only rows where all features are not null        
+    
+    dropna: ["all", "target", None]
+        whether to keep only rows where all features are not null. 
+            - `target` removes only null targets, keeping X nulls in place
+            - `all` removes all nulls in x,y and possibly conditional
+            - None keeps all nulls in all columns
+    
     cross_validation : int
         Number of iterations during cross-validation. This has the following implications:
         For example, if the number is 4, then it is possible to detect patterns when there are at least 4 times the same observation. If the limit is increased, the required minimum observations also increase. This is important, because this is the limit when sklearn will throw an error and the PPS cannot be calculated
@@ -820,7 +836,7 @@ def predictors(df,
         )
 
     
-    if not dropna:
+    if dropna is None:
         #sample first to avoid overhead of sampling sub dfs
         df = _maybe_sample(df, sample, random_seed=random_seed)
         
@@ -861,7 +877,7 @@ def matrix(df,
            average = "weighted",                   
            model=tree.DecisionTreeClassifier(),
            sample=5_000,
-           dropna=True,
+           dropna="all",
            cross_validation=4,
            random_seed=123,
            invalid_score=0,
@@ -894,8 +910,13 @@ def matrix(df,
     sample : int or `None`
         Number of rows for sampling. The sampling decreases the calculation time of the PPS.
         If `None` there will be no sampling.
-    dropna: bool
-        whether to keep only rows where all features are not null        
+    
+    dropna: ["all", "target", None]
+        whether to keep only rows where all features are not null. 
+            - `target` removes only null targets, keeping X nulls in place
+            - `all` removes all nulls in x,y and possibly conditional
+            - None keeps all nulls in all columns
+    
     cross_validation : int
         Number of iterations during cross-validation. This has the following implications:
         For example, if the number is 4, then it is possible to detect patterns when there are at least 4 times the same observation. If the limit is increased, the required minimum observations also increase. This is important, because this is the limit when sklearn will throw an error and the PPS cannot be calculated
@@ -931,8 +952,8 @@ def matrix(df,
             f"""The 'sorted' argument should be one of [True, False] but you passed: {sorted}\nPlease adjust your input to one of the valid values"""
         )
     
-    if not dropna:
-        #sample first to avoid overhead of sampling sub dfs
+    if dropna is None:
+        #sample first to avoid overhead of sampling sub dfs when possible
         df = _maybe_sample(df, sample, random_seed=random_seed)
     
     scores = []
