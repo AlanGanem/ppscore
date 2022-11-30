@@ -30,7 +30,7 @@ from sklearn.model_selection import TimeSeriesSplit
 
 from joblib import Parallel, delayed, effective_n_jobs
 
-from preprocessing import RobustKBinsDiscretizer
+from .preprocessing import RobustKBinsDiscretizer
 
 NOT_SUPPORTED_ANYMORE = "NOT_SUPPORTED_ANYMORE"
 TO_BE_CALCULATED = -1
