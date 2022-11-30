@@ -1,5 +1,10 @@
 import numpy as np
 
+from itertools import permutations, product
+  
+
+import warnings
+
 from tqdm import tqdm
 
 from sklearn import tree
@@ -23,8 +28,9 @@ from pandas.api.types import (
 
 from sklearn.model_selection import TimeSeriesSplit
 
-from .preprocessing import RobustKBinsDiscretizer
+from preprocessing import RobustKBinsDiscretizer
 
+from joblib import Parallel, delayed, effective_n_jobs
 
 NOT_SUPPORTED_ANYMORE = "NOT_SUPPORTED_ANYMORE"
 TO_BE_CALCULATED = -1
@@ -50,7 +56,7 @@ def cross_val_predict_time_series(
     params descriptions can be found in cross_val_predict docs
     
     """
-    
+    warnings.filterwarnings(action="ignore")
     if isinstance(cv, TimeSeriesSplit):
         splits = list(cv.split(X))           
     elif isinstance(cv, (list, tuple)):
@@ -390,12 +396,16 @@ def _determine_case_and_prepare_df(df, x, y, sample_weight = None,  conditional 
             conditional = None
             pass
         else:
-            cols = cols + [conditional]
+            if isinstance(conditional, (tuple,list,set)):
+                cols = cols + conditional
+            else:
+                cols = cols + [conditional]
     
     if sample_weight is None:
         pass
     else:
         cols = cols + [sample_weight]
+    
     
     df = df[cols]
     # IDEA: log.warning when values have been dropped
@@ -624,7 +634,8 @@ def score(
         A dict that contains multiple fields about the resulting PPS.
         The dict enables introspection into the calculations that have been performed under the hood
     """
-
+    
+    warnings.filterwarnings("ignore")
     if not isinstance(df, pd.DataFrame):
         raise TypeError(
             f"The 'df' argument should be a pandas.DataFrame but you passed a {type(df)}\nPlease convert your input to a pandas.DataFrame"
@@ -761,6 +772,7 @@ def predictors(df,
                catch_errors=True,
                verbose = False,
                cv_n_jobs = None,
+               n_jobs = None,
                **kwargs):
     """
     Calculate the Predictive Power Score (PPS) of all the features in the dataframe
@@ -839,31 +851,42 @@ def predictors(df,
     if dropna is None:
         #sample first to avoid overhead of sampling sub dfs
         df = _maybe_sample(df, sample, random_seed=random_seed)
-        
-    scores=[]
-    n_cols_remove = len([i for i in [conditional,sample_weight] if not i is None])
     
-    with tqdm(total=df.shape[1] - n_cols_remove - 1, position=0, leave=True, disable = not verbose) as pbar:       
-        for x in df.columns:
-            if (x != sample_weight) and (x != conditional) and (x != y):
-                s = score(
-                        df=df,
-                        x=x,
-                        y=y,
-                        conditional=conditional,
-                        model=model,
-                        n_bins_target=n_bins_target,
-                        n_bins_independent=n_bins_independent,
-                        average=average,
-                        sample=sample,
-                        sample_weight = sample_weight,
-                        dropna=dropna,
-                        catch_errors = catch_errors,
-                        cv_n_jobs = cv_n_jobs,
-                        **kwargs
-                        ) 
-                scores.append(s)
-                pbar.update()
+    if not conditional is None:
+        if isinstance(conditional, (tuple, list, set)):
+            conditional =  [*conditional]
+        else:
+            conditional = [conditional]
+    else:
+        conditional = [conditional]
+
+    df_columns = set(df.columns)
+    extra_cols = {i for i in conditional+[sample_weight, y] if not i is None}
+    df_columns = list(df_columns - extra_cols)
+    
+    perms = [[i,y]+list(extra_cols) for i in df_columns]
+    
+    perms = [(p,df[list(set(p))]) for p in perms]
+            
+    n_jobs = effective_n_jobs(n_jobs)
+    
+    scores = Parallel(n_jobs=n_jobs)(delayed(score)(
+                df=p[1],
+                x=p[0][0],
+                y=p[0][1],
+                conditional=conditional if not conditional == [None] else None,
+                model=model,
+                n_bins_target=n_bins_target,
+                n_bins_independent=n_bins_independent,
+                average=average,
+                sample=sample,
+                sample_weight = sample_weight,
+                dropna=dropna,
+                catch_errors = catch_errors,
+                cv_n_jobs = cv_n_jobs,
+                **kwargs)         
+        for p in tqdm(perms, position=0, leave=True, disable = not verbose)
+    )
     
     return _format_list_of_dicts(scores=scores, output=output, sorted=sorted)
 
@@ -884,6 +907,7 @@ def matrix(df,
            catch_errors=True,
            verbose = False,
            cv_n_jobs=None,
+           n_jobs = None,
            **kwargs):
     
     """
@@ -955,30 +979,44 @@ def matrix(df,
     if dropna is None:
         #sample first to avoid overhead of sampling sub dfs when possible
         df = _maybe_sample(df, sample, random_seed=random_seed)
+        
     
-    scores = []
-    n_cols_remove = len([i for i in [conditional,sample_weight] if not i is None])
-    with tqdm(total=(df.shape[1]-n_cols_remove)**2, position=0, leave=True, disable = not verbose) as pbar:       
-        for x in df.columns:
-            if (x != sample_weight) and (x != conditional):                    
-                for y in df.columns:
-                    if (y != sample_weight) and (y != conditional):
-                        s = score(
-                            df=df,
-                            x=x,
-                            y=y,
-                            conditional=conditional,
-                            model=model,
-                            n_bins_target=n_bins_target,
-                            n_bins_independent=n_bins_independent,
-                            average=average,
-                            sample=sample,
-                            sample_weight = sample_weight,
-                            dropna=dropna,
-                            catch_errors = catch_errors,
-                            cv_n_jobs = cv_n_jobs,
-                            **kwargs) 
-                        scores.append(s)
-                        pbar.update()
-
+    if not conditional is None:
+        if isinstance(conditional, (tuple, list, set)):
+            conditional =  [*conditional]
+        else:
+            conditional = [conditional]
+    else:
+        conditional = [conditional]
+            
+    df_columns = set(df.columns)
+    extra_cols = {i for i in conditional+[sample_weight] if not i is None}
+    df_columns = list(df_columns - extra_cols)
+    
+    perms = [[*i]+list(extra_cols) for i in product(df_columns, repeat=2)]
+    
+    perms = [(p,df[list(set(p))]) for p in perms]
+            
+    n_jobs = effective_n_jobs(n_jobs)
+    
+    scores = Parallel(n_jobs=n_jobs)(delayed(score)(
+                df=p[1],
+                x=p[0][0],
+                y=p[0][1],
+                conditional=conditional if not conditional == [None] else None,
+                model=model,
+                n_bins_target=n_bins_target,
+                n_bins_independent=n_bins_independent,
+                average=average,
+                sample=sample,
+                sample_weight = sample_weight,
+                dropna=dropna,
+                catch_errors = catch_errors,
+                cv_n_jobs = cv_n_jobs,
+                **kwargs)         
+        for p in tqdm(perms, position=0, leave=True, disable = not verbose)
+    )
+                                                                                                                      
     return _format_list_of_dicts(scores=scores, output=output, sorted=sorted)
+
+
