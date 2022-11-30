@@ -30,7 +30,7 @@ from sklearn.model_selection import TimeSeriesSplit
 
 from joblib import Parallel, delayed, effective_n_jobs
 
-from .preprocessing import RobustKBinsDiscretizer
+from preprocessing import RobustKBinsDiscretizer
 
 NOT_SUPPORTED_ANYMORE = "NOT_SUPPORTED_ANYMORE"
 TO_BE_CALCULATED = -1
@@ -866,14 +866,14 @@ def predictors(df,
     
     perms = [[i,y]+list(extra_cols) for i in df_columns]
     
-    perms = [(p,df[list(set(p))]) for p in perms]
+    #perms = [(p,df[list(set(p))]) for p in perms]
             
     n_jobs = effective_n_jobs(n_jobs)
     
     scores = Parallel(n_jobs=n_jobs)(delayed(score)(
-                df=p[1],
-                x=p[0][0],
-                y=p[0][1],
+                df=df[list(set(p))],
+                x=p[0],
+                y=p[1],
                 conditional=conditional if not conditional == [None] else None,
                 model=model,
                 n_bins_target=n_bins_target,
@@ -995,14 +995,14 @@ def matrix(df,
     
     perms = [[*i]+list(extra_cols) for i in product(df_columns, repeat=2)]
     
-    perms = [(p,df[list(set(p))]) for p in perms]
+    #perms = [(p,df[list(set(p))]) for p in perms]
             
     n_jobs = effective_n_jobs(n_jobs)
     
     scores = Parallel(n_jobs=n_jobs)(delayed(score)(
-                df=p[1],
-                x=p[0][0],
-                y=p[0][1],
+                df=df[list(set(p))],
+                x=p[0],
+                y=p[1],
                 conditional=conditional if not conditional == [None] else None,
                 model=model,
                 n_bins_target=n_bins_target,
