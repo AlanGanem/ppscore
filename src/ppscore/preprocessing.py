@@ -1,14 +1,134 @@
 import numpy as np
 
-from sklearn.preprocessing import KBinsDiscretizer, OrdinalEncoder, OneHotEncoder
+from sklearn.preprocessing import KBinsDiscretizer, OrdinalEncoder, OneHotEncoder, normalize
 from sklearn.cluster import KMeans
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 from sklearn.utils import check_array
 
+from scipy import sparse
+
 import warnings
 
 class RobustKBinsDiscretizer(KBinsDiscretizer):
+    
+    """
+    Bin continuous data into intervals. This implementation is robust to nan values and also implements a Fuzzy version, where the onehotencoded memberships depends on the relative distance from the 
+    center of the bin. very usefull for picewise fit of linear regression.
+    
+    Read more in the :ref:`User Guide <preprocessing_discretization>`.
+    .. versionadded:: 0.20
+    Parameters
+    ----------
+    n_bins : int or array-like of shape (n_features,), default=5
+        The number of bins to produce. Raises ValueError if ``n_bins < 2``.
+    encode : {'onehot', 'onehot-dense', 'ordinal','fuzzy'}, default='onehot'
+        Method used to encode the transformed result.
+        - 'onehot': Encode the transformed result with one-hot encoding
+          and return a sparse matrix. Ignored features are always
+          stacked to the right.
+        - 'onehot-dense': Encode the transformed result with one-hot encoding
+          and return a dense array. Ignored features are always
+          stacked to the right.
+        - 'ordinal': Return the bin identifier encoded as an integer value.
+        - 'fuzzy': Like one hot encoding, but mebmershipds are fuzzy, depending on how close the value is to the center of the bin.
+    strategy : {'uniform', 'quantile', 'kmeans'}, default='quantile'
+        Strategy used to define the widths of the bins.
+        - 'uniform': All bins in each feature have identical widths.
+        - 'quantile': All bins in each feature have the same number of points.
+        - 'kmeans': Values in each bin have the same nearest center of a 1D
+          k-means cluster.
+    dtype : {np.float32, np.float64}, default=None
+        The desired data-type for the output. If None, output dtype is
+        consistent with input dtype. Only np.float32 and np.float64 are
+        supported.
+        .. versionadded:: 0.24        
+    fuzzy_alpha: float, default = 1
+        concentration factor for the fuzzy one hot values. final values will be normalize(X**fuzzy_alpha, 'l1')    
+    handle_nan : {'error', 'handle', 'ignore'}, default='handle'
+        whether to handle NaNs.
+            - 'handle' will create a new column for NaNs if encoding is one hot/fuzzy, or will add a -1 class if encoding is ordinal.
+            - 'ignore' will work only for onehot/fuzzy. it will simply leave all onehot columns of each feature empty, while not having an indicator for NaN like in handle
+            - 'error' will reproduce the non robust behaviour, yielding an error if NaNs are found    
+    silence_warnings: bool, default=True
+        whether to silence warnings during inference and fit        
+    subsample : int or None (default='warn')
+        Maximum number of samples, used to fit the model, for computational
+        efficiency. Used when `strategy="quantile"`.
+        `subsample=None` means that all the training samples are used when
+        computing the quantiles that determine the binning thresholds.
+        Since quantile computation relies on sorting each column of `X` and
+        that sorting has an `n log(n)` time complexity,
+        it is recommended to use subsampling on datasets with a
+        very large number of samples.
+        .. deprecated:: 1.1
+           In version 1.3 and onwards, `subsample=2e5` will be the default.
+    random_state : int, RandomState instance or None, default=None
+        Determines random number generation for subsampling.
+        Pass an int for reproducible results across multiple function calls.
+        See the `subsample` parameter for more details.
+        See :term:`Glossary <random_state>`.
+        .. versionadded:: 1.1
+    Attributes
+    ----------
+    bin_edges_ : ndarray of ndarray of shape (n_features,)
+        The edges of each bin. Contain arrays of varying shapes ``(n_bins_, )``
+        Ignored features will have empty arrays.
+    n_bins_ : ndarray of shape (n_features,), dtype=np.int_
+        Number of bins per feature. Bins whose width are too small
+        (i.e., <= 1e-8) are removed with a warning.
+    n_features_in_ : int
+        Number of features seen during :term:`fit`.
+        .. versionadded:: 0.24
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during :term:`fit`. Defined only when `X`
+        has feature names that are all strings.
+        .. versionadded:: 1.0
+    See Also
+    --------
+    Binarizer : Class used to bin values as ``0`` or
+        ``1`` based on a parameter ``threshold``.
+    Notes
+    -----
+    In bin edges for feature ``i``, the first and last values are used only for
+    ``inverse_transform``. During transform, bin edges are extended to::
+      np.concatenate([-np.inf, bin_edges_[i][1:-1], np.inf])
+    You can combine ``KBinsDiscretizer`` with
+    :class:`~sklearn.compose.ColumnTransformer` if you only want to preprocess
+    part of the features.
+    ``KBinsDiscretizer`` might produce constant features (e.g., when
+    ``encode = 'onehot'`` and certain bins do not contain any data).
+    These features can be removed with feature selection algorithms
+    (e.g., :class:`~sklearn.feature_selection.VarianceThreshold`).
+    Examples
+    --------
+    >>> from sklearn.preprocessing import KBinsDiscretizer
+    >>> X = [[-2, 1, -4,   -1],
+    ...      [-1, 2, -3, -0.5],
+    ...      [ 0, 3, -2,  0.5],
+    ...      [ 1, 4, -1,    2]]
+    >>> est = KBinsDiscretizer(n_bins=3, encode='ordinal', strategy='uniform')
+    >>> est.fit(X)
+    KBinsDiscretizer(...)
+    >>> Xt = est.transform(X)
+    >>> Xt  # doctest: +SKIP
+    array([[ 0., 0., 0., 0.],
+           [ 1., 1., 1., 0.],
+           [ 2., 2., 2., 1.],
+           [ 2., 2., 2., 2.]])
+    Sometimes it may be useful to convert the data back into the original
+    feature space. The ``inverse_transform`` function converts the binned
+    data into the original feature space. Each value will be equal to the mean
+    of the two bin edges.
+    >>> est.bin_edges_[0]
+    array([-2., -1.,  0.,  1.])
+    >>> est.inverse_transform(Xt)
+    array([[-1.5,  1.5, -3.5, -0.5],
+           [-0.5,  2.5, -2.5, -0.5],
+           [ 0.5,  3.5, -1.5,  0.5],
+           [ 0.5,  3.5, -1.5,  1.5]])
+    """
+
     
     #TODO: allow extrapolation behaviour in the extremes if desired (not sure if conceptually possible)
     def __init__(
@@ -20,12 +140,16 @@ class RobustKBinsDiscretizer(KBinsDiscretizer):
         fuzzy_alpha = 1,
         dtype=None,
         handle_nan = 'handle', #error, handle, ignore        
+        silence_warnings = True,
     ):        
         self.encode = encode
         self.strategy = strategy
         self.fuzzy_alpha = fuzzy_alpha
         self.dtype = dtype
         self.handle_nan = handle_nan      
+        self.silence_warnings = silence_warnings
+        if self.silence_warnings:
+            warnings.filterwarnings("ignore")
         super().__init__(n_bins = n_bins,encode = encode,strategy = strategy,dtype = dtype)
         return
     
@@ -88,8 +212,8 @@ class RobustKBinsDiscretizer(KBinsDiscretizer):
             self.n_bins =int(max(4, min(10000, int(np.power(X.shape[0],0.5)))))
             n_bins = self._validate_n_bins(n_features)            
             self.n_bins = 'auto'
-        else:
-            n_bins = self._validate_n_bins(n_features)
+        else:            
+            n_bins = self._validate_n_bins(n_features)            
         
         bin_edges = np.zeros(n_features, dtype=object)
         bin_lens = np.zeros(n_features, dtype=object)
@@ -104,13 +228,25 @@ class RobustKBinsDiscretizer(KBinsDiscretizer):
                 column = column
             
             col_min, col_max = column.min(), column.max()
-
+            unique = np.unique(column)
             if col_min == col_max:
-                warnings.warn(
-                    "Feature %d is constant and will be replaced with 0." % jj
-                )
+                # warnings.warn(
+                #     "Feature %d is constant and will be replaced with 0." % jj
+                # )
                 n_bins[jj] = 1
                 bin_edges[jj] = np.array([-np.inf, np.inf])
+                continue
+            
+            #check for low cardinalitty
+            if len(unique) <= n_bins[jj]:
+                warnings.warn(
+                     f"Feature {jj} is has cardinality {len(unique)}"
+                )
+                _bins = np.insert(unique,0,unique.min()-1)
+                _bins = np.append(_bins,unique.max()+1)
+
+                n_bins[jj] = len(_bins)
+                bin_edges[jj] = _bins
                 continue
 
             if self.strategy == "uniform":
@@ -142,11 +278,11 @@ class RobustKBinsDiscretizer(KBinsDiscretizer):
                 mask = np.ediff1d(bin_edges[jj], to_begin=np.inf) > 1e-8
                 bin_edges[jj] = bin_edges[jj][mask]
                 if len(bin_edges[jj]) - 1 != n_bins[jj]:
-                    warnings.warn(
-                        "Bins whose width are too small (i.e., <= "
-                        "1e-8) in feature %d are removed. Consider "
-                        "decreasing the number of bins." % jj
-                    )
+                    # warnings.warn(
+                    #     "Bins whose width are too small (i.e., <= "
+                    #     "1e-8) in feature %d are removed. Consider "
+                    #     "decreasing the number of bins." % jj
+                    # )
                     n_bins[jj] = len(bin_edges[jj]) - 1
             
             #create other attributes
