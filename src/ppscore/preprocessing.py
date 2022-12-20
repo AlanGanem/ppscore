@@ -140,6 +140,7 @@ class RobustKBinsDiscretizer(KBinsDiscretizer):
         fuzzy_alpha = 1,
         dtype=None,
         handle_nan = 'handle', #error, handle, ignore        
+        return_sparse = True,
         silence_warnings = True,
     ):        
         self.encode = encode
@@ -148,6 +149,7 @@ class RobustKBinsDiscretizer(KBinsDiscretizer):
         self.dtype = dtype
         self.handle_nan = handle_nan      
         self.silence_warnings = silence_warnings
+        self.return_sparse = return_sparse
         if self.silence_warnings:
             warnings.filterwarnings("ignore")
         super().__init__(n_bins = n_bins,encode = encode,strategy = strategy,dtype = dtype)
@@ -436,6 +438,10 @@ class RobustKBinsDiscretizer(KBinsDiscretizer):
             Xt_enc = sparse.csr_matrix(Xt_enc)
             Xt_enc = self._fuzzy_transform(X, Xt, Xt_enc)
         
+        if not self.return_sparse:
+            if sparse.issparse(Xt_enc):
+                Xt_enc = Xt_enc.A
+                
         return Xt_enc
 
     def _fuzzy_transform(self, X, Xt, Xt_enc):
